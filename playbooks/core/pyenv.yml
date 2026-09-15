@@ -1,0 +1,450 @@
+---
+# Install pyenv system-wide on a multi-user workstation.
+#
+#   /usr/local/pyenv/                   the checkout at the pinned tag, root-owned
+#   /usr/local/bin/pyenv                symlink, so pyenv is on every account's PATH
+#   /etc/profile.d/pyenv.sh             live `eval "$(pyenv init - bash)"`, interactive bash only
+#
+# pyenv is a per-account tool given a system-wide install: the code is shared
+# and read-only, while every account keeps its own PYENV_ROOT -- ~/.pyenv,
+# pyenv's own default, which this playbook deliberately does not override --
+# and builds its own interpreters into it.
+#
+# That split is pyenv's supported layout rather than a trick played on it.
+# libexec/pyenv resolves _PYENV_INSTALL_PREFIX from the real path of the
+# script it was invoked through, and puts BOTH
+# ${_PYENV_INSTALL_PREFIX}/plugins/*/bin and ${PYENV_ROOT}/plugins/*/bin on
+# PATH, so the bundled python-build plugin -- that is, `pyenv install` --
+# is found even though PYENV_ROOT is somewhere else entirely. Confirmed by
+# running `pyenv install --list` as uid 65534 with a scratch HOME (task 12),
+# which is the check that would fail first if this stopped being true.
+#
+# A single shared PYENV_ROOT was the alternative, and is rejected:
+# $PYENV_ROOT/versions is what `pyenv install` writes into, so a shared one is
+# either root-owned -- every account needs root to add an interpreter -- or
+# group-writable, which lets any account replace an interpreter the others
+# run. Per-account roots cost a compile each -- a built 3.14.7 measures
+# 363MB under one account's ~/.pyenv -- and that is the honest shape of this
+# tool rather than a defect in the playbook.
+#
+# The build toolchain in task 1 is what makes `pyenv install` usable by an
+# account that cannot apt-install anything: python-build compiles CPython from
+# source, and which headers it finds decides whether the resulting interpreter
+# has ssl, zlib, bz2, lzma, readline, sqlite3, ctypes and curses in its
+# standard library at all. A missing header is not an error there -- the
+# module is silently dropped -- so tasks 14 and 15 compile against those eight
+# headers as an unprivileged uid rather than trusting that apt did it.
+#
+# Findings worth keeping:
+#
+#   - `pyenv --version` prints the same "pyenv <version>" three ways: from the
+#     tagged checkout (via `git describe`), from one whose git the caller
+#     cannot read (uid 65534 hits git's dubious-ownership refusal on this
+#     root-owned tree), and from a tree with no .git at all: in the last two
+#     libexec/pyenv---version falls back to a version baked into the file,
+#     and the two sources agree. So the guard in task 2 and the unprivileged
+#     check in task 11 compare the same exact string, and neither depends on
+#     git working for the caller.
+#
+#   - The activation hook is guarded on $BASH_VERSION because what
+#     `pyenv init - bash` emits is bash, not POSIX sh: it uses `source`, and a
+#     dash login shell reading an unguarded /etc/profile.d/pyenv.sh fails with
+#     `source: not found` on every login.
+#
+#   - It is guarded on a writable $HOME as well, because generating that
+#     output is not read-only: `pyenv init -` mkdirs $PYENV_ROOT/{shims,
+#     versions} on the way. An account whose home is missing or unwritable --
+#     a system account, or uid 65534, whose passwd home is /nonexistent --
+#     otherwise gets two `mkdir: cannot create directory` errors on every
+#     shell start. Reproduced before the guard was written.
+#
+#   - No /etc/bash_completion.d file, which reads POLICY.md's B3 table
+#     loosely: `pyenv init -` sources pyenv's own completions/pyenv.bash out
+#     of the install prefix, so a second copy under /etc/bash_completion.d
+#     would be loaded twice. B3 asks for the output of a `completion bash`
+#     subcommand to be snapshotted; pyenv has no such subcommand, only a
+#     completion file it ships and wires up itself.
+#
+# Nothing here writes into any account's $HOME, root's included: `pyenv
+# --version` runs no mkdir (unlike `pyenv init -`), so the guard and the
+# verification can call the binary directly instead of reading a package
+# database the way mise.yml has to.
+#
+# Usage:
+#   ansible-playbook core/pyenv.yml -e host=<inventory host or group>
+#   ansible-playbook core/pyenv.yml -e host=ws01 -e pyenv_version=2.8.4
+
+- name: Install pyenv system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # Upstream release tag, without the leading v. Checked 2026-09-15.
+    pyenv_version: "2.8.5"
+    pyenv_repo: https://github.com/pyenv/pyenv.git
+    pyenv_prefix: /usr/local/pyenv
+    pyenv_bin: /usr/local/bin/pyenv
+    pyenv_profile_hook: /etc/profile.d/pyenv.sh
+    # python-build's documented build dependencies for Ubuntu, with
+    # libncurses-dev in place of the libncursesw5-dev upstream names: that
+    # name is a pure virtual package provided by libncurses-dev (confirmed
+    # with apt-cache showpkg), and naming the package that actually exists
+    # keeps this list from depending on apt's single-provider resolution.
+    # Unpinned like every other prerequisite list here -- these are the
+    # toolchain, not the thing being installed.
+    pyenv_build_deps:
+      - build-essential
+      - ca-certificates
+      - curl
+      - git
+      - libbz2-dev
+      - libffi-dev
+      - liblzma-dev
+      - libncurses-dev
+      - libreadline-dev
+      - libsqlite3-dev
+      - libssl-dev
+      - libxml2-dev
+      - libxmlsec1-dev
+      - tk-dev
+      - xz-utils
+      - zlib1g-dev
+    # One header per standard-library module that CPython builds only when it
+    # finds it. The comment on each is the module lost if it is absent.
+    pyenv_stdlib_headers:
+      - bzlib.h              # bz2
+      - curses.h             # curses
+      - ffi.h                # ctypes
+      - lzma.h               # lzma
+      - openssl/ssl.h        # ssl
+      - readline/readline.h  # readline
+      - sqlite3.h            # sqlite3
+      - zlib.h               # zlib
+    # Disk-backed, not /tmp, per C4.
+    pyenv_smoke_home: /var/tmp/pyenv-smoke-home
+    pyenv_smoke_source: /var/tmp/pyenv-smoke-home/pyenv-stdlib-headers.c
+    # uid/gid used to prove the install is usable by an arbitrary user
+    pyenv_verify_uid: 65534    # nobody
+    pyenv_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # git fetches the checkout in task 4; everything else is what
+      # python-build needs to compile a complete CPython later, for an
+      # account that cannot install packages itself.
+      ansible.builtin.apt:
+        name: "{{ pyenv_build_deps }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Check the currently installed pyenv version
+      # Read through the symlink on PATH rather than the checkout, so a tree
+      # that is present but unlinked reads as "needs installing" -- that is
+      # the state in which no account can run pyenv at all.
+      #
+      # check_mode: false throughout this playbook wherever a task only READS
+      # state: without it a dry run skips them, and the guards and checks
+      # below then act on output that was never produced.
+      ansible.builtin.command: "{{ pyenv_bin }} --version"
+      register: pyenv_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 3. Decide whether pyenv needs installing
+      # The whole line is compared, not a prefix: `pyenv --version` prints
+      # exactly "pyenv 2.8.5", so a pin of 2.8.5 must not be satisfied by an
+      # installed 2.8.50. A missing binary registers rc 127 with an empty
+      # stdout, which is likewise not the pin, so absence is visible here
+      # (C2) without a stat.
+      ansible.builtin.set_fact:
+        pyenv_install_needed: >-
+          {{ (pyenv_installed.stdout | default('') | trim)
+             != ('pyenv ' ~ pyenv_version) }}
+        pyenv_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (pyenv_installed.stdout | default('') | trim)
+                      != ('pyenv ' ~ pyenv_version)) }}
+
+    - name: 3a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install pyenv {{ pyenv_version }}, so the version
+          check and the unprivileged smoke tests below are skipped rather than
+          failed. Re-run without --check to verify the install.
+      when: not (pyenv_can_verify | bool)
+
+    - name: 4. Fetch the pyenv source at the pinned tag
+      # No depth limit: a shallow clone cannot be re-pointed at a different
+      # tag on the next run, which breaks version bumps.
+      #
+      # not ansible_check_mode as well, per C1: the git module is not skipped
+      # under --check, it runs git to work out what would change, and task 1
+      # only simulated installing git. On a host that has neither, the dry
+      # run dies on `Failed to find required executable "git"` -- an error
+      # about this playbook's own unmet prerequisite, reported as though the
+      # playbook were broken. Reproduced on a host with no git; the 3a note
+      # above already says what a dry run could not check.
+      ansible.builtin.git:
+        repo: "{{ pyenv_repo }}"
+        dest: "{{ pyenv_prefix }}"
+        version: "v{{ pyenv_version }}"
+        force: true
+      when:
+        - pyenv_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 5. Make the checkout readable by every account
+      # Guards against a restrictive umask on the control path; 'X' only adds
+      # the execute bit to directories and already-executable files, so the
+      # scripts under bin/ and libexec/ stay executable and the definition
+      # files under plugins/python-build/share stay plain data.
+      ansible.builtin.file:
+        path: "{{ pyenv_prefix }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 'u=rwX,go=rX'
+        recurse: true
+
+    - name: 6. Link pyenv onto the default PATH
+      # /usr/local/bin/pyenv -> {{ pyenv_prefix }}/bin/pyenv, which is itself
+      # a symlink to ../libexec/pyenv. pyenv resolves its install prefix from
+      # the real path of the script, so it follows both hops and still finds
+      # its own libexec and plugins -- confirmed by running `pyenv install
+      # --list` through exactly this two-hop link.
+      #
+      # This also has to exist before the hook in task 7 is any use: what
+      # `pyenv init -` emits ends with `command pyenv rehash`, which needs
+      # pyenv on PATH already.
+      #
+      # Skipped in the dry run that also skipped the clone: `state: link`
+      # refuses a src that does not exist (deliberately -- no `force: true`
+      # here, so a real file already sitting at {{ pyenv_bin }} fails the run
+      # loudly instead of being replaced), and under --check task 4 has not
+      # produced one. Without this the dry run dies on "src file does not
+      # exist", which says nothing about the host being fine.
+      ansible.builtin.file:
+        src: "{{ pyenv_prefix }}/bin/pyenv"
+        dest: "{{ pyenv_bin }}"
+        state: link
+        owner: root
+        group: root
+        follow: false
+      when: not (ansible_check_mode and (pyenv_install_needed | bool))
+
+    - name: 7. Install the shared pyenv activation hook
+      # A literal, live eval -- not a captured snapshot of `pyenv init -`'s
+      # output -- matching mise.yml's mise.sh and modern-tools.yml's fzf.sh:
+      # the output embeds $PYENV_ROOT and $PATH as they are in the shell
+      # being started, so it has to be generated fresh in each one.
+      #
+      # Both guards are load-bearing; see the header comment for what each
+      # one was reproduced against.
+      ansible.builtin.copy:
+        dest: "{{ pyenv_profile_hook }}"
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          # Managed by playbooks/core/pyenv.yml
+          # `pyenv init - bash` emits bash, not POSIX sh, and generating it
+          # creates $PYENV_ROOT/{shims,versions}: skip both for a non-bash
+          # shell and for an account with no writable home.
+          if [ -n "$BASH_VERSION" ] && [ -x {{ pyenv_bin }} ] && [ -w "$HOME" ]; then
+            eval "$(pyenv init - bash)"
+          fi
+      register: pyenv_profile_hook_file
+
+    - name: 8. Ensure interactive non-login shells read /etc/profile.d
+      # /etc/profile.d/*.sh is only sourced by login shells by default; a
+      # non-login interactive shell (a plain SSH session, for instance) reads
+      # /etc/bash.bashrc instead. Idempotent no-op if another playbooks/
+      # playbook already laid this down on the target.
+      ansible.builtin.blockinfile:
+        path: /etc/bash.bashrc
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: profile.d for interactive shells"
+        block: |
+          for f in /etc/profile.d/*.sh; do [ -r "$f" ] && . "$f"; done
+      register: pyenv_bashrc_hook
+
+    - name: 9. Verify the installed pyenv version
+      ansible.builtin.command: "{{ pyenv_bin }} --version"
+      register: pyenv_version_out
+      changed_when: false
+      check_mode: false
+      failed_when: (pyenv_version_out.stdout | trim) != ('pyenv ' ~ pyenv_version)
+      when: pyenv_can_verify | bool
+
+    - name: 10. Create a scratch HOME for the unprivileged checks
+      # pyenv derives PYENV_ROOT from $HOME, and the hook in task 7 writes
+      # into it, so the unprivileged checks need a writable one. uid 65534's
+      # real home is /nonexistent.
+      #
+      # check_mode: false because `command` validates chdir *before* check
+      # mode skips the task, so a directory that exists only in simulation
+      # fails the dry run.
+      ansible.builtin.file:
+        path: "{{ pyenv_smoke_home }}"
+        state: directory
+        owner: "{{ pyenv_verify_uid }}"
+        group: "{{ pyenv_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+      when: pyenv_can_verify | bool
+
+    - name: 11. Report the pyenv version as an unprivileged user
+      # chdir into the scratch HOME, not ansible's working directory: uid
+      # 65534 cannot stat this repository's checkout path, and pyenv shells
+      # out to git, which stats the current directory just to start up (C6).
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ pyenv_verify_uid }} --regid={{ pyenv_verify_gid }} --clear-groups
+          env HOME={{ pyenv_smoke_home }} {{ pyenv_bin }} --version
+        chdir: "{{ pyenv_smoke_home }}"
+      register: pyenv_smoke_version
+      changed_when: false
+      check_mode: false
+      failed_when: (pyenv_smoke_version.stdout | trim) != ('pyenv ' ~ pyenv_version)
+      when: pyenv_can_verify | bool
+
+    - name: 12. List the interpreters python-build can build, as an unprivileged user
+      # The check that proves the multi-user claim, and A4's preferred level:
+      # offline real work, not a version string. `pyenv install --list` reads
+      # the definition files under plugins/python-build/share/python-build in
+      # the SHARED prefix while PYENV_ROOT points at the scratch home, so it
+      # passes only if an account that installed none of this can reach the
+      # bundled plugin. It contacts nothing -- the definitions are files in
+      # the checkout.
+      #
+      # PYENV_ROOT is deliberately left unset so the zero-configuration path
+      # (~/.pyenv, derived from HOME) is what gets proven, per point 9.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ pyenv_verify_uid }} --regid={{ pyenv_verify_gid }} --clear-groups
+          env HOME={{ pyenv_smoke_home }} {{ pyenv_bin }} install --list
+        chdir: "{{ pyenv_smoke_home }}"
+      register: pyenv_smoke_list
+      changed_when: false
+      check_mode: false
+      # A bare CPython release, not merely non-empty output: an unreachable
+      # plugin fails earlier with "pyenv: no such command `install'", and a
+      # reachable one with no definitions would still print its header.
+      failed_when: >-
+        pyenv_smoke_list.rc != 0
+        or (pyenv_smoke_list.stdout_lines
+            | map('trim')
+            | select('match', '^3\.[0-9]+\.[0-9]+$')
+            | list | length) == 0
+      when: pyenv_can_verify | bool
+
+    - name: 13. Confirm the activation hook loads for an unprivileged interactive shell
+      # Proves B3 end to end rather than that a file was written: a non-login
+      # interactive shell for an arbitrary uid must come out with both the
+      # pyenv() function and its own shims directory on PATH, which happens
+      # only if /etc/bash.bashrc -> /etc/profile.d/pyenv.sh -> `pyenv init -
+      # bash` actually ran.
+      #
+      # `shell`, not `command`, and that is not cosmetic: run through
+      # ansible.builtin.command, this exact argv comes back reporting the
+      # PATH the shell started with, as if /etc/profile.d had never touched
+      # it -- while an ordinary exported variable set beside it in the same
+      # file does survive (reproduced with a probe file in /etc/profile.d,
+      # and against the same command run by hand on the target, which is
+      # correct both ways). The check would then fail against a host where
+      # the hook is working perfectly. mise.yml's equivalent check uses the
+      # shell module too.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ pyenv_verify_uid }} --regid={{ pyenv_verify_gid }} --clear-groups
+          bash -i -c 'declare -F pyenv && case ":$PATH:" in *":$HOME/.pyenv/shims:"*) echo pyenv-shims-on-path;; esac'
+        chdir: "{{ pyenv_smoke_home }}"
+      environment:
+        HOME: "{{ pyenv_smoke_home }}"
+      register: pyenv_smoke_hook
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        'pyenv' not in pyenv_smoke_hook.stdout
+        or 'pyenv-shims-on-path' not in pyenv_smoke_hook.stdout
+      # Also skipped when --check is the run that would have written the
+      # hook: tasks 7 and 8 only simulate it, so there is nothing to source.
+      when:
+        - pyenv_can_verify | bool
+        - not (ansible_check_mode
+               and (pyenv_profile_hook_file is changed or pyenv_bashrc_hook is changed))
+
+    - name: 14. Write a source file including the headers a complete CPython needs
+      ansible.builtin.copy:
+        dest: "{{ pyenv_smoke_source }}"
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          {% for header in pyenv_stdlib_headers %}
+          #include <{{ header }}>
+          {% endfor %}
+          int main(void) { return 0; }
+      check_mode: false
+      when: pyenv_can_verify | bool
+
+    - name: 15. Compile against those headers as an unprivileged user
+      # The build toolchain is half of what this playbook installs, and it is
+      # the half that fails silently: python-build drops a module whose
+      # header it cannot find and still reports a successful install, so the
+      # missing sqlite3 or ssl only surfaces weeks later at an import. This
+      # is a syntax-only compile -- it needs no libraries and takes well
+      # under a second -- run as uid 65534 to prove the headers are readable
+      # by an account that installed none of them.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ pyenv_verify_uid }} --regid={{ pyenv_verify_gid }} --clear-groups
+          env HOME={{ pyenv_smoke_home }} cc -fsyntax-only {{ pyenv_smoke_source }}
+        chdir: "{{ pyenv_smoke_home }}"
+      register: pyenv_smoke_headers
+      changed_when: false
+      check_mode: false
+      when: pyenv_can_verify | bool
+
+    - name: 16. Remove the scratch HOME
+      # Takes the smoke source and whatever the activation hook created under
+      # it (~/.pyenv/shims, ~/.pyenv/versions) with it.
+      ansible.builtin.file:
+        path: "{{ pyenv_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 17. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            pyenv {{ pyenv_version }}
+            {{ pyenv_can_verify | bool
+               | ternary('is installed system-wide.', 'would be installed system-wide.') }}
+          - ""
+          - "  {{ pyenv_prefix }}/"
+          - "  {{ pyenv_bin }}"
+          - "  {{ pyenv_profile_hook }}"
+          - ""
+          - >-
+            {{ pyenv_can_verify | bool
+               | ternary('Verified as an unprivileged user (uid ' ~ pyenv_verify_uid
+                         ~ '): the version on PATH, the bundled python-build plugin reached from a'
+                         ~ ' PYENV_ROOT of its own, the activation hook in an interactive shell, and'
+                         ~ ' a compile against the headers a complete CPython needs.',
+                         'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "No interpreter is installed for anyone by this playbook, and no"
+          - "PYENV_ROOT is set: each account keeps its own ~/.pyenv and compiles"
+          - "the versions it wants into it, for itself:"
+          - ""
+          - "  pyenv install --list     # what this pyenv knows how to build"
+          - "  pyenv install 3.14.7     # compiles from source into ~/.pyenv/versions"
+          - "  pyenv global 3.14.7      # or `pyenv local` inside one project"
+          - ""
+          - "Open a new shell first: the activation hook is read at shell start."

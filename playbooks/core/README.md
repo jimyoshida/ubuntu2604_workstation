@@ -988,6 +988,97 @@ Version overrides — one variable per tool:
 ansible-playbook core/kube-tools.yml -e host=ws01 -e k9s_version=0.51.0
 ```
 
+## pyenv.yml
+
+Installs [pyenv](https://github.com/pyenv/pyenv) from its upstream git tag, as one shared
+read-only checkout.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/pyenv/` | the checkout at the pinned tag, root-owned |
+| `/usr/local/bin/pyenv` | symlink, so `pyenv` is on every account's `PATH` |
+| `/etc/profile.d/pyenv.sh` | live `eval "$(pyenv init - bash)"`, interactive bash only |
+
+**The code is shared; the interpreters are not.** `PYENV_ROOT` is left at pyenv's own default of
+`~/.pyenv`, so each account builds the versions it wants into its own home and this playbook
+installs an interpreter for nobody. That split is pyenv's supported layout rather than something
+done to it: `libexec/pyenv` resolves its install prefix from the real path of the script it was
+invoked through, and puts both `<prefix>/plugins/*/bin` and `$PYENV_ROOT/plugins/*/bin` on
+`PATH`, so the bundled `python-build` plugin — that is, `pyenv install` — is found even though
+`PYENV_ROOT` is somewhere else entirely.
+
+A single shared `PYENV_ROOT` was the alternative, and is rejected: `$PYENV_ROOT/versions` is what
+`pyenv install` writes into, so a shared one is either root-owned, and every account needs root
+to add an interpreter, or group-writable, and any account can replace an interpreter the others
+run. Per-account roots cost a compile each, and that is the honest state of the tool rather than
+a defect: `pyenv install` builds CPython from source, per account, with no shared mode to migrate
+into — a 3.14.7 built this way measures 363 MB under one account's `~/.pyenv`, and every account
+that wants it pays that again. [`mise.yml`](#miseyml) above also gets an account a per-account runtime, from a prebuilt
+download rather than a compile; pyenv is here for projects that pin a `.python-version` and
+expect `pyenv` itself to resolve it.
+
+**The build toolchain is part of this install, not a prerequisite left to the user.**
+`python-build` compiles CPython from source, and which headers it finds is what decides whether
+the interpreter it produces has `ssl`, `sqlite3`, `lzma`, `bz2`, `ctypes`, `readline`, `curses`
+and `zlib` in its standard library at all — a missing header is not an error there, the module is
+simply dropped, and an account that cannot install packages cannot fix it afterwards. So the
+playbook installs upstream's documented dependency list, naming `libncurses-dev` where upstream
+says `libncursesw5-dev`: that name is a pure virtual package provided by `libncurses-dev`.
+
+### Verification
+
+Four checks, each as `nobody` with a scratch `HOME`:
+
+- **`pyenv --version`** — the pin itself.
+- **`pyenv install --list`** — the multi-user claim in one command. It reads the definition files
+  inside the shared prefix while `PYENV_ROOT` points into the scratch home, so it passes only if
+  an account that installed none of this can reach the bundled plugin. Offline: the definitions
+  are files in the checkout.
+- **A non-login interactive shell**, which must come out with the `pyenv` function defined *and*
+  its own `~/.pyenv/shims` on `PATH` — the `/etc/bash.bashrc` → `/etc/profile.d/pyenv.sh` chain
+  end to end, not merely a file that was written.
+- **A syntax-only compile against those eight headers**, because the toolchain half of this
+  install is the half that fails silently.
+
+**`pyenv --version` reports the pin the same way three different ways round,** which is why the
+guard and the unprivileged check can compare one exact string: from the tagged checkout it comes
+from `git describe`, from a checkout whose git the caller cannot read — uid 65534 hits git's
+dubious-ownership refusal on this root-owned tree — and from a tree with no `.git` at all it
+comes from a version baked into `libexec/pyenv---version`. All three print `pyenv 2.8.5`.
+
+**The hook is guarded twice, and both guards were reproduced before being written.**
+`pyenv init - bash` emits bash rather than POSIX sh (it uses `source`), so a dash login shell
+reading an unguarded `/etc/profile.d/pyenv.sh` fails with `source: not found` on every login. And
+generating that output is not read-only — `pyenv init -` creates `$PYENV_ROOT/{shims,versions}`
+on the way — so an account whose home is missing or unwritable, including uid 65534, otherwise
+gets two `mkdir: cannot create directory` errors every time a shell starts.
+
+**There is no `/etc/bash_completion.d/pyenv`,** which reads [POLICY.md's B3](../POLICY.md)
+loosely: `pyenv init -` sources pyenv's own `completions/pyenv.bash` out of the install prefix
+itself, so a second copy under `/etc/bash_completion.d` would be loaded twice. B3 asks for the
+output of a `completion bash` subcommand to be snapshotted; pyenv has no such subcommand, only a
+completion file it ships and wires up itself.
+
+**One finding only visible by running the playbook.** The interactive-shell check runs through
+ansible's `shell` module, not `command`: with `command`, that same argv reports the `PATH` the
+shell started with, as though `/etc/profile.d` had never touched it, while an ordinary exported
+variable set beside it in the same file does survive — so the check fails against a host where
+the hook is working. The same command run by hand on the target is correct either way.
+
+Version overrides:
+
+```bash
+ansible-playbook core/pyenv.yml -e host=ws01 -e pyenv_version=2.8.4
+```
+
+Then, per account and per project, for themselves:
+
+```bash
+pyenv install --list          # what this pyenv knows how to build
+pyenv install 3.14.7          # compiles into ~/.pyenv/versions
+pyenv global 3.14.7           # or `pyenv local` inside one project
+```
+
 ## What is *not* here
 
 There is no chrony playbook: Ubuntu 26.04 ships chrony pre-configured out of the box. Go and

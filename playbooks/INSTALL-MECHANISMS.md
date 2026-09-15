@@ -8,7 +8,7 @@ distro package is current enough and named as expected; a vendor's own apt repos
 exists and the distro package lags; an upstream release artifact straight to
 `/usr/local/bin` (or equivalent), for a single static binary or similar; an upstream git tag
 plus its own install script, for a tool that ships as a git repository; pipx as root, for a
-Python application; or `npm install -g` with `become`, for a Node.js application. 63 playbooks,
+Python application; or `npm install -g` with `become`, for a Node.js application. 64 playbooks,
 six canonical mechanisms plus a handful of second-layer package managers that sit on top of a
 shared prerequisite rather than installing a runtime themselves.
 
@@ -17,7 +17,7 @@ shared prerequisite rather than installing a runtime themselves.
 | 1. Ubuntu apt package | 10 |
 | 2. Vendor apt repository | 15 |
 | 3. Upstream release artifact → `/usr/local/bin` (or equivalent) | 24 |
-| 4. Upstream git tag + install script / tree | 2 |
+| 4. Upstream git tag + install script / tree | 3 |
 | 5. pipx as root | 2 |
 | 6. `npm install -g` with `become` | 7 |
 | Second-layer package manager (see below) | 3 |
@@ -117,6 +117,7 @@ The tool ships as a git repository rather than a packaged release.
 | --- | --- |
 | [misc/bats.yml](misc/bats.yml) | shallow clone pinned to a tag, then upstream's own `install.sh`; `bats-support`/`bats-assert` helper libraries cloned in full alongside it |
 | [misc/testssl.yml](misc/testssl.yml) | clone pinned to a tag **and** the commit it pointed to (no installer) — the whole tree is kept, since the script resolves its cipher data and bundled OpenSSL build relative to its own location, and only the entry-point script is symlinked onto `PATH` |
+| [core/pyenv.yml](core/pyenv.yml) | clone pinned to a tag, kept whole (no installer) — pyenv resolves its libexec and its bundled `python-build` plugin relative to its own location, so only `bin/pyenv` is symlinked onto `PATH` |
 
 ## 5. pipx as root
 
