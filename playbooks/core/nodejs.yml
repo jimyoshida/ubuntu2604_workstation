@@ -7,8 +7,8 @@
 #   /etc/apt/sources.list.d/nodesource.sources   repository definition, NodeSource's key inline
 #
 # Node.js itself already lands in a root-owned system path -- npm's global
-# prefix on a NodeSource install is /usr -- so like misc-tools.yml this
-# migration is correctness work: pin the version (the source playbook ran
+# prefix on a NodeSource install is /usr -- so this migration is pure
+# correctness work: pin the version (the source playbook ran
 # NodeSource's own `curl | bash` setup script and installed whatever LTS
 # release that resolved to on the day it ran, recording nothing), replace the
 # script with a declarative deb822_repository per A5, and take the

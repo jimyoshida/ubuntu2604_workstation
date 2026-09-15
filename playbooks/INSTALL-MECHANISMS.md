@@ -8,13 +8,13 @@ distro package is current enough and named as expected; a vendor's own apt repos
 exists and the distro package lags; an upstream release artifact straight to
 `/usr/local/bin` (or equivalent), for a single static binary or similar; an upstream git tag
 plus its own install script, for a tool that ships as a git repository; pipx as root, for a
-Python application; or `npm install -g` with `become`, for a Node.js application. 62 playbooks,
+Python application; or `npm install -g` with `become`, for a Node.js application. 61 playbooks,
 six canonical mechanisms plus a handful of second-layer package managers that sit on top of a
 shared prerequisite rather than installing a runtime themselves.
 
 | Mechanism | Playbooks |
 | --- | ---: |
-| 1. Ubuntu apt package | 10 |
+| 1. Ubuntu apt package | 9 |
 | 2. Vendor apt repository | 15 |
 | 3. Upstream release artifact → `/usr/local/bin` (or equivalent) | 23 |
 | 4. Upstream git tag + install script / tree | 2 |
@@ -32,7 +32,6 @@ version, no repository work needed.
 | [core/shellcheck.yml](core/shellcheck.yml) | `shellcheck` |
 | [core/openjdk.yml](core/openjdk.yml) | `default-jdk` (pulls in `default-jre` + `default-jdk-headless`) |
 | [core/dotnet.yml](core/dotnet.yml) | `dotnet-sdk-10.0` — Ubuntu 26.04 carries .NET 10 directly; no Microsoft repo needed |
-| [core/misc-tools.yml](core/misc-tools.yml) | 10 packages: git, git-lfs, git-secret, mailutils, xlsx2csv, docx2txt, net-tools, ncat, make, parallel |
 | [core/modern-tools.yml](core/modern-tools.yml) | 13 packages (bat→`batcat`+symlink, fd→`fdfind`+symlink, fzf+`/etc/profile.d` hook, plus 10 more) |
 | [core/ansible.yml](core/ansible.yml) | `ansible-core` (Galaxy collections on top are a separate mechanism — see below) |
 | [cloud-cli/promtool.yml](cloud-cli/promtool.yml) | `promtool`, `amtool` (via `prometheus-alertmanager`, daemon stopped/disabled) |

@@ -9,9 +9,6 @@
 #     instead of a plain apt install.
 #   - jsonnet.yml: a plain apt install like the rest of this bundle, split
 #     out so it can be pinned and verified independently of the others.
-#   - jq was split out the same way, as jq.yml, then folded into
-#     misc-tools.yml, and has since moved to the base OS layer, so no
-#     playbook in this directory installs it any more.
 #
 #   /usr/bin/<tool>            for everything installed via apt
 #   /usr/local/bin/bat         symlink; apt installs the binary as batcat

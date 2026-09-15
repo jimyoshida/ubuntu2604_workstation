@@ -1,9 +1,10 @@
 # Core Playbooks (multi-user workstations)
 
-Standalone playbooks that install the base CLI toolset, Node.js, mise, ansible-core, the .NET
-SDK, PowerShell, OpenJDK, Ruby and the container and Kubernetes tooling (Docker, Podman,
-kubectl, Helm, kind, minikube, the Dev Containers CLI, kubelogin/k9s/kdash) on a **shared**
-Ubuntu workstation, to root-owned system paths usable by every account on the host. See [POLICY.md](../POLICY.md) for the rules they follow.
+Standalone playbooks that install Node.js, mise, ansible-core, the .NET SDK, PowerShell,
+OpenJDK, Ruby and the container and Kubernetes tooling (Docker, Podman, kubectl, Helm, kind,
+minikube, the Dev Containers CLI, kubelogin/k9s/kdash) on a **shared**
+Ubuntu workstation, to root-owned system paths usable by every account on the host.
+See [POLICY.md](../POLICY.md) for the rules they follow.
 
 Run from `playbooks/`:
 
@@ -18,9 +19,9 @@ These playbooks follow the same rules as [`misc/`](../misc/README.md) and
 any `$HOME`, and a closing check that runs the tool as an arbitrary uid
 (`setpriv --reuid=65534`) rather than as the connecting account.
 
-Most of what is here needs nothing beyond that: `misc-tools.yml` and `nodejs.yml` are apt-only
-and root-owned, and `mise.yml` needs nothing beyond the `/etc/profile.d` hook it installs
-itself. The container and Kubernetes playbooks — [`docker.yml`](#dockeryml),
+Most of what is here needs nothing beyond that: `nodejs.yml` is apt-only and root-owned,
+and `mise.yml` needs nothing beyond the `/etc/profile.d` hook it installs itself. The
+container and Kubernetes playbooks — [`docker.yml`](#dockeryml),
 [`podman.yml`](#podmanyml), [`kubectl.yml`](#kubectlyml), [`helm.yml`](#helmyml),
 [`kind.yml`](#kindyml), [`minikube.yml`](#minikubeyml),
 [`devcontainers.yml`](#devcontainersyml) and [`kube-tools.yml`](#kube-toolsyml) — install
@@ -81,38 +82,6 @@ xhost +local:            # grants local connections until the X session ends
 If `~/.bashrc` on an account here already carries an `xhost +local:docker` or
 `xhost +local:podman` line from an older setup, these playbooks will not remove it —
 that is a manual, per-account cleanup.
-
-## misc-tools.yml
-
-Installs ten general-purpose CLI packages from the Ubuntu archive: `git`, `git-lfs`,
-`git-secret`, `mailutils`, `xlsx2csv`, `docx2txt`, `net-tools`, `ncat`, `make`,
-`parallel` — all to `/usr/bin`. Nothing is added to a shell profile, and the only
-per-user state any of them creates is GNU parallel's: running a job — not `--version`, which
-writes nothing — makes `~/.parallel/tmp` in the invoking account's own home, where it belongs.
-The install task passes `install_recommends: false`, added for `mailutils` (whose only
-recommendation is a full `default-mta` like postfix) but applied across the board so no
-package here pulls in more than the CLI tool asked for.
-
-Every package is pinned and version-compared against what's installed, and every package is
-verified as an unprivileged user.
-
-Two packages do not fit a plain `--version` check, and the verify command for **every**
-package was confirmed against the actual installed binary rather than assumed:
-
-- **`parallel`** could be checked with a version string, but running jobs is the whole point
-  of it, so its check runs three and compares their combined output — the one verify command
-  here that does real work. Ubuntu's package prints no citation notice (confirmed: an
-  unprivileged run writes nothing at all to stderr), so nothing has to be silenced for it.
-- **`docx2txt`** has no `--version` output at all. Verified by doing real work too: builds a
-  minimal real `.docx` (a zip containing a bare `word/document.xml` and
-  `word/_rels/document.xml.rels`) and checks the extracted text comes back correctly.
-
-One finding only visible by actually running the playbook, not by reading the source:
-`git-lfs` and `git-secret`'s unprivileged checks needed a `chdir` into the scratch
-`HOME`, because `git` stats the current directory on startup and an unprivileged
-uid cannot even stat this repository's checkout path — the trap
-[POLICY.md's C6](../POLICY.md) describes, here triggered by `git` itself rather than the
-tool being installed.
 
 ## nodejs.yml
 
@@ -399,9 +368,8 @@ Also lays down:
 
 `yq.yml` lives as its own playbook in this directory (below) rather than bundled here, and
 `jsonnet.yml` lives in [`misc/`](../misc/README.md) — each pinned and verified independently.
-`jq` used to be split out the same way, and was then folded into
-[`misc-tools.yml`](#misc-toolsyml); it has since moved to the base OS layer, so no playbook in
-this directory carries it any more.
+`jq` was split out the same way once, then folded into the `misc-tools.yml` bundle; neither
+is here any more, so no playbook in this directory installs it.
 
 **No vendor apt repo needed for `gum` and `glow`.** Ubuntu 26.04 ("resolute") carries apt
 packages for both directly (`gum` 0.17.0-1, `glow` 2.1.1-1), so a single apt install covers
