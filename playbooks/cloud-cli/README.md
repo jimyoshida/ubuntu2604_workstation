@@ -1157,11 +1157,22 @@ to apt, so `noble` is what this playbook standardizes on.
 
 ### The signing key is fetched, not pinned
 
-HashiCorp's packaging key `798AEC654E5C15428C8E42EEAA16FCBCA621E701` **expires
-2028-01-09**, so it is fetched each run — `deb822_repository` compares by checksum,
+HashiCorp's packaging key `D55C0D1AC78A8D8126CB631CFC9CA96ACA026560` **expires
+2031-09-08**, so it is fetched each run — `deb822_repository` compares by checksum,
 so that stays idempotent — and only its fingerprint is asserted. Pinning today's bytes
-would turn the eventual rotation into a signature failure on every host. Same form as
+would turn the next rotation into a signature failure on every host. Same form as
 `github-cli.yml`, opposite form to `azure-cli.yml`, whose key does not expire.
+
+**One rotation has already happened, and it is worth knowing what it looked like.** On
+2026-09-09 HashiCorp replaced `798AEC654E5C15428C8E42EEAA16FCBCA621E701` — a key that
+still had until 2028-01-09 on it — with the one above. Hosts carrying the old key kept
+working until their next `apt-get update`, which then warned `NO_PUBKEY
+FC9CA96ACA026560` and left this repository's index un-refreshed. Because
+`ansible.builtin.apt` treats any failing index as a failed cache update, that broke
+`update_cache: true` in *every* playbook here — reported as
+`Failed to update apt cache: unknown reason`, with nothing pointing at Vault. Re-running
+this playbook installs the new key and clears all of it. Advancing the pinned
+fingerprint is a hand edit by design: task 6 is what refuses a key nobody vouched for.
 
 ### The smoke test formats a policy file
 

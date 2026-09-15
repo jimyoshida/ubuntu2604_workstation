@@ -93,11 +93,19 @@
     vault_cli_arch: "{{ vault_cli_arch_map.get(ansible_facts['architecture'], '') }}"
     vault_cli_key_url: "https://apt.releases.hashicorp.com/gpg"
     # A5's rule: pin the fingerprint always; pin the key bytes too, only when
-    # the key has no expiry. This one EXPIRES 2028-01-09, so it is fetched each
+    # the key has no expiry. This one EXPIRES 2031-09-08, so it is fetched each
     # run (deb822_repository compares by checksum, so that stays idempotent)
     # and only its identity is asserted. Embedding today's bytes would turn the
-    # eventual rotation into a signature failure on every host.
-    vault_cli_key_fingerprint: "798AEC654E5C15428C8E42EEAA16FCBCA621E701"
+    # next rotation into a signature failure on every host.
+    #
+    # There has already been one: on 2026-09-09 HashiCorp replaced
+    # 798AEC654E5C15428C8E42EEAA16FCBCA621E701, which was not due to expire
+    # until 2028-01-09. A host still holding the old key gets `NO_PUBKEY
+    # FC9CA96ACA026560` from every apt run, which is enough to fail the cache
+    # update of every other playbook here as well, none of them about Vault.
+    # The fingerprint below is advanced by hand on purpose: task 6 exists to
+    # refuse a key nobody vouched for.
+    vault_cli_key_fingerprint: "D55C0D1AC78A8D8126CB631CFC9CA96ACA026560"
     # The apt source the deleted services/vault.yml wrote for this same
     # repository, via apt_repository (which derives the filename from the URI).
     vault_cli_legacy_source: /etc/apt/sources.list.d/apt_releases_hashicorp_com.list
