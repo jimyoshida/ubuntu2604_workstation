@@ -21,9 +21,9 @@
 # ~/.azcopy is per-user state and belongs in each account's own home: azcopy
 # writes a job plan directory and a log file there the first time an account
 # runs anything that touches the job engine. `--version` writes nothing, but
-# `jobs list` and even `completion bash` do -- which is why task 14 below
-# generates the completion script with HOME pointed at the scratch directory
-# rather than letting it seed /root/.azcopy.
+# `jobs list` and even `completion bash` do -- which is why task 13 below
+# generates the completion script as the verify uid, with HOME pointed at
+# the scratch directory, rather than letting it seed /root/.azcopy.
 #
 # Usage:
 #   ansible-playbook cloud-cli/azcopy.yml -e host=<inventory host or group>
@@ -72,7 +72,7 @@
   tasks:
     - name: 1. Install prerequisites
       # bash-completion provides the loader that reads /etc/bash_completion.d,
-      # so the completion file task 15 writes is inert without it.
+      # so the completion file task 14 writes is inert without it.
       ansible.builtin.apt:
         name:
           - bash-completion
@@ -94,7 +94,7 @@
       # detected: an -e azcopy_sha256=... extra var replaces the play var
       # entirely, so a value still equal to the map's is one nobody overrode.
       # Without this guard, overriding only the version downloads a new tarball
-      # and checks it against the old version's hash, which fails in task 8
+      # and checks it against the old version's hash, which fails in task 7
       # with a checksum mismatch that reads like a tampered download.
       ansible.builtin.fail:
         msg: >-
@@ -225,12 +225,26 @@
       when: azcopy_can_verify | bool
 
     - name: 13. Generate the bash completion script
-      # azcopy ships no completion file; cobra generates one on demand. HOME is
-      # redirected at the scratch directory because this command creates
-      # ~/.azcopy for whoever runs it -- confirmed against the binary -- and
-      # root's home is not where a log from an install belongs.
+      # azcopy ships no completion file; cobra generates one on demand. Two
+      # things about the way it is invoked here, the second of them found only
+      # by running this against a real host:
+      #
+      # HOME is redirected at the scratch directory because this command
+      # creates ~/.azcopy for whoever runs it -- confirmed against the binary
+      # -- and root's home is not where a log from an install belongs.
+      #
+      # It also runs as the verify uid rather than as root, because as root it
+      # creates that ~/.azcopy root-owned INSIDE the scratch HOME, and task 16
+      # -- running as the uid the scratch HOME actually belongs to -- then
+      # cannot open its own job log underneath it:
+      #   panic: open /var/tmp/azcopy-smoke-home/.azcopy/<uuid>.log:
+      #   permission denied
+      # The completion text is identical either way, and generating it
+      # unprivileged also exercises the binary as an account that did not
+      # install it, which task 15 then asserts explicitly.
       ansible.builtin.command:
         cmd: >-
+          setpriv --reuid={{ azcopy_verify_uid }} --regid={{ azcopy_verify_gid }} --clear-groups
           env HOME={{ azcopy_smoke_home }} {{ azcopy_bin }} completion bash
         chdir: "{{ azcopy_smoke_home }}"
       register: azcopy_completion_out
