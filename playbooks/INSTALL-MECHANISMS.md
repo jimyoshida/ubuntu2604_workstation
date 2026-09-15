@@ -8,13 +8,13 @@ distro package is current enough and named as expected; a vendor's own apt repos
 exists and the distro package lags; an upstream release artifact straight to
 `/usr/local/bin` (or equivalent), for a single static binary or similar; an upstream git tag
 plus its own install script, for a tool that ships as a git repository; pipx as root, for a
-Python application; or `npm install -g` with `become`, for a Node.js application. 61 playbooks,
+Python application; or `npm install -g` with `become`, for a Node.js application. 62 playbooks,
 six canonical mechanisms plus a handful of second-layer package managers that sit on top of a
 shared prerequisite rather than installing a runtime themselves.
 
 | Mechanism | Playbooks |
 | --- | ---: |
-| 1. Ubuntu apt package | 9 |
+| 1. Ubuntu apt package | 10 |
 | 2. Vendor apt repository | 15 |
 | 3. Upstream release artifact → `/usr/local/bin` (or equivalent) | 23 |
 | 4. Upstream git tag + install script / tree | 2 |
@@ -37,6 +37,7 @@ version, no repository work needed.
 | [cloud-cli/promtool.yml](cloud-cli/promtool.yml) | `promtool`, `amtool` (via `prometheus-alertmanager`, daemon stopped/disabled) |
 | [core/podman.yml](core/podman.yml) | `podman`, `podman-compose` |
 | [misc/jsonnet.yml](misc/jsonnet.yml) | `jsonnet` |
+| [misc/exiftool.yml](misc/exiftool.yml) | `libimage-exiftool-perl` — named after the Perl distribution, not after the `exiftool` CLI it ships |
 | [core/ruby.yml](core/ruby.yml) | `ruby`, `ruby-dev`, `ruby3.3`, `ruby-rubygems` — the metapackages pin the *series*, `ruby3.3` the interpreter |
 
 Two apt gotchas worth knowing before assuming a distro package is fine as-is: Ubuntu's `yq` is

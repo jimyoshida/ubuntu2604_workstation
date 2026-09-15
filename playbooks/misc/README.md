@@ -1184,3 +1184,37 @@ The latest release (1.0.1 is also the newest there has ever been):
 ```bash
 curl -sS https://registry.npmjs.org/jsmin | jq -r '."dist-tags".latest'
 ```
+
+## exiftool.yml
+
+Installs [exiftool](https://exiftool.org/) from the Ubuntu archive. The apt package is named
+after the Perl distribution it packages, `libimage-exiftool-perl`, not after the tool.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/exiftool` | the CLI |
+| `/usr/share/perl5/Image/ExifTool/` | the modules it loads at run time |
+
+Nothing is added to a shell profile and no per-user state is created: `~/.ExifTool_config` is
+read only where an account has written one itself, which is where a personal tag definition
+belongs.
+
+### Verification
+
+`exiftool -ver` prints the upstream version alone — no Debian revision, no `+dfsg` repack
+suffix — so the pin `13.50+dfsg-1` is checked against dpkg, and `13.50` against the CLI. Both
+checks run as `nobody`, the second one reading a real file's `MIMEType`, because that is what
+proves the `Image::ExifTool` module tree is loadable by an account that did not install it.
+A version string on its own does not show that.
+
+Version override:
+
+```bash
+ansible-playbook misc/exiftool.yml -e host=ws01 -e exiftool_version=13.55+dfsg-1
+```
+
+The version the target's own apt sources carry:
+
+```bash
+apt-cache policy libimage-exiftool-perl
+```

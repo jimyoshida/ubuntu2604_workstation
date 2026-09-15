@@ -1,0 +1,145 @@
+---
+# Install exiftool system-wide on a multi-user workstation.
+#
+# Ubuntu's package is named after the Perl distribution rather than after the
+# tool, and is current enough to use as-is:
+#
+#   /usr/bin/exiftool                   the CLI, from libimage-exiftool-perl
+#   /usr/share/perl5/Image/ExifTool/    the modules it loads at run time
+#
+# There is no per-user state and nothing to add to a shell profile: exiftool
+# reads ~/.ExifTool_config only where an account has created one itself, which
+# is exactly where a personal tag definition belongs.
+#
+# Usage:
+#   ansible-playbook misc/exiftool.yml -e host=<inventory host or group>
+#   ansible-playbook misc/exiftool.yml -e host=ws01 -e exiftool_version=13.55+dfsg-1
+
+- name: Install exiftool system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # dpkg-query's status field for a package that is really installed. One
+    # removed but not purged (`deinstall ok config-files`) still reports its
+    # version, so the guards below compare the status too, or a removed
+    # package reads as "already at the pin".
+    exiftool_dpkg_ok: "install ok installed|"
+    exiftool_package: libimage-exiftool-perl
+    # apt candidate version on Ubuntu 26.04 (resolute), checked 2026-09-15.
+    # apt versions are release-specific, so overriding this only helps if that
+    # exact dpkg version is available from the target's configured apt sources.
+    exiftool_version: "13.50+dfsg-1"
+    # What `exiftool -ver` prints is the upstream version alone -- no Debian
+    # revision, no +dfsg repack suffix. Confirmed against the package's own
+    # binary rather than assumed.
+    exiftool_cli_version: "{{ exiftool_version | regex_search('^[0-9.]+') }}"
+    exiftool_smoke_file: /var/tmp/exiftool-smoke.txt
+    # uid/gid used to prove the install is usable by an arbitrary user
+    exiftool_verify_uid: 65534    # nobody
+    exiftool_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check the currently installed exiftool version
+      # ${Status} as well as ${Version} -- see exiftool_dpkg_ok above.
+      ansible.builtin.command: "dpkg-query -W -f='${Status}|${Version}' {{ exiftool_package }}"
+      register: exiftool_installed
+      changed_when: false
+      # check_mode: false throughout this playbook wherever a task only READS
+      # state: without it a dry run skips them, and the guards and checks
+      # below then act on output that was never produced.
+      check_mode: false
+      failed_when: false
+
+    - name: 2. Decide whether exiftool needs installing
+      ansible.builtin.set_fact:
+        exiftool_install_needed: >-
+          {{ exiftool_installed.rc != 0
+             or exiftool_installed.stdout != (exiftool_dpkg_ok ~ exiftool_version) }}
+        exiftool_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (exiftool_installed.rc != 0
+                       or exiftool_installed.stdout != (exiftool_dpkg_ok ~ exiftool_version))) }}
+
+    - name: 2a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install {{ exiftool_package }} {{ exiftool_version }},
+          so the version check and the unprivileged metadata read below are
+          skipped rather than failed. Re-run without --check to verify.
+      when: not (exiftool_can_verify | bool)
+
+    - name: 3. Install exiftool via apt
+      ansible.builtin.apt:
+        name: "{{ exiftool_package }}={{ exiftool_version }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+        allow_downgrade: true
+      when: exiftool_install_needed | bool
+
+    - name: 4. Verify the installed exiftool version
+      ansible.builtin.command: "dpkg-query -W -f='${Status}|${Version}' {{ exiftool_package }}"
+      register: exiftool_version_out
+      changed_when: false
+      failed_when: exiftool_version_out.stdout != (exiftool_dpkg_ok ~ exiftool_version)
+      check_mode: false
+      when: exiftool_can_verify | bool
+
+    - name: 5. Create a world-readable file for the unprivileged check
+      ansible.builtin.copy:
+        content: "exiftool smoke test\n"
+        dest: "{{ exiftool_smoke_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+      check_mode: false
+
+    - name: 6. Read a file's metadata as an unprivileged user
+      # Two checks rather than one: `-ver` proves the pinned build is what is
+      # on PATH, and reading a real file's MIMEType proves the Image::ExifTool
+      # module tree under /usr/share/perl5 is loadable by an account that did
+      # not install it -- which a version string on its own does not show.
+      ansible.builtin.shell:
+        cmd: >-
+          setpriv --reuid={{ exiftool_verify_uid }} --regid={{ exiftool_verify_gid }} --clear-groups
+          exiftool -ver
+          && setpriv --reuid={{ exiftool_verify_uid }} --regid={{ exiftool_verify_gid }} --clear-groups
+          exiftool -S -MIMEType {{ exiftool_smoke_file }}
+        chdir: /tmp
+      environment:
+        HOME: /tmp
+        TMPDIR: /tmp
+      register: exiftool_smoke
+      changed_when: false
+      failed_when: >-
+        exiftool_smoke.rc != 0
+        or exiftool_cli_version not in exiftool_smoke.stdout
+        or 'MIMEType: text/plain' not in exiftool_smoke.stdout
+      check_mode: false
+      when: exiftool_can_verify | bool
+
+    - name: 7. Remove the file used by the unprivileged check
+      ansible.builtin.file:
+        path: "{{ exiftool_smoke_file }}"
+        state: absent
+      check_mode: false
+
+    - name: 8. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - "exiftool {{ exiftool_cli_version }} ({{ exiftool_package }} {{ exiftool_version }}) installed system-wide."
+          - ""
+          - "  /usr/bin/exiftool"
+          - ""
+          - "Verified runnable by an unprivileged user (uid {{ exiftool_verify_uid }})."
+          - ""
+          - "Usage:"
+          - "  exiftool file.jpg                       # Show every tag in a file"
+          - "  exiftool -S -MIMEType file              # Show one tag, short format"
+          - "  exiftool -json -ProductVersion app.exe  # Machine-readable output"
+      when: exiftool_can_verify | bool
