@@ -560,6 +560,7 @@ grant without an explicit list is wrong.
 | `vault` | `~/.vault-token` | — |
 | `az devops` | `~/.azure/azuredevops/config` | — |
 | `databricks` | `~/.databrickscfg` | — |
+| `azcopy` | `~/.azcopy/` — job plans, logs, cached Entra ID token | — |
 | `docker` | `~/.docker/config.json`, `~/.docker/contexts` | `docker` group — **root-equivalent** |
 | `podman` | `~/.local/share/containers`, `~/.config/containers` | `loginctl enable-linger`; subuid/subgid |
 | `kubectl` | `~/.kube/config` | — |
@@ -597,7 +598,7 @@ Before opening a change for review, confirm:
   `core/kind.yml` and `core/minikube.yml` gate their checks on a bare
   `not ansible_check_mode` rather than a `<tool>_can_verify` fact, so a dry run skips them even
   against a host that already has the pinned version. That is safe — it never reports an unproven
-  `ok` and never fails misleadingly — but it is the conservative form, and the other 59 playbooks
+  `ok` and never fails misleadingly — but it is the conservative form, and the other 60 playbooks
   do better. Converting them means adding the fact and the 2a note, as C1 describes.
 
 - **`deb822_repository` is not idempotent *across* control-node versions.** ansible-core 2.16 and

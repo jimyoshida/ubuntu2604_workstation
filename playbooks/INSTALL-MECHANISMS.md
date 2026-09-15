@@ -8,7 +8,7 @@ distro package is current enough and named as expected; a vendor's own apt repos
 exists and the distro package lags; an upstream release artifact straight to
 `/usr/local/bin` (or equivalent), for a single static binary or similar; an upstream git tag
 plus its own install script, for a tool that ships as a git repository; pipx as root, for a
-Python application; or `npm install -g` with `become`, for a Node.js application. 62 playbooks,
+Python application; or `npm install -g` with `become`, for a Node.js application. 63 playbooks,
 six canonical mechanisms plus a handful of second-layer package managers that sit on top of a
 shared prerequisite rather than installing a runtime themselves.
 
@@ -16,7 +16,7 @@ shared prerequisite rather than installing a runtime themselves.
 | --- | ---: |
 | 1. Ubuntu apt package | 10 |
 | 2. Vendor apt repository | 15 |
-| 3. Upstream release artifact → `/usr/local/bin` (or equivalent) | 23 |
+| 3. Upstream release artifact → `/usr/local/bin` (or equivalent) | 24 |
 | 4. Upstream git tag + install script / tree | 2 |
 | 5. pipx as root | 2 |
 | 6. `npm install -g` with `become` | 7 |
@@ -92,6 +92,7 @@ point goes on `PATH`.
 | [cloud-cli/jira-cli.yml](cloud-cli/jira-cli.yml) | release tarball (de-brewed) |
 | [cloud-cli/influx-cli.yml](cloud-cli/influx-cli.yml) | tarball from `dl.influxdata.com`, not GitHub — versioned directory + symlink (de-brewed) |
 | [cloud-cli/loki-cli.yml](cloud-cli/loki-cli.yml) | zip, verified against the release's `SHA256SUMS` |
+| [cloud-cli/azcopy.yml](cloud-cli/azcopy.yml) | release tarball — upstream publishes no checksums file at all, so each asset's sha256 is pinned in the playbook and tied to one exact version |
 | [misc/grype-syft.yml](misc/grype-syft.yml) | each project's own `install.sh`, pinned to the release tag (not `main`), which resolves and installs the binary itself |
 | [misc/maven.yml](misc/maven.yml) | tarball from Apache (not GitHub) — versioned directory + symlink |
 | [misc/zap.yml](misc/zap.yml) | ~270 MB distribution zip from the GitHub release — versioned directory + symlink to the launcher |

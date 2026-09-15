@@ -1,0 +1,334 @@
+---
+# Install AzCopy system-wide on a multi-user workstation.
+#
+#   /usr/local/bin/azcopy              the binary, root-owned, mode 0755
+#   /etc/bash_completion.d/azcopy      shell completions, generated at install time
+#
+# Microsoft publishes azcopy in its own apt repository at
+# packages.microsoft.com/repos/microsoft-ubuntu-<release>-prod, which is not an
+# option here: the prod repository has no resolute suite carrying it (resolute
+# publishes 666 packages and azcopy is not among them, while noble publishes
+# 4779 and does), and pointing a workstation at the noble prod repository to
+# reach one binary would also put Microsoft's kubectl, moby-* and mssql
+# packages ahead of Ubuntu's own for every apt run on the host. The upstream
+# release tarball installs one binary and adds no repository.
+#
+# The identity stays per-user: `azcopy login` caches its Entra ID token under
+# ~/.azcopy, and the AZCOPY_* credential variables (AZCOPY_SPA_CLIENT_SECRET,
+# AZCOPY_AUTO_LOGIN_TYPE, a SAS token on the URL) are per-person secrets.
+# Nothing here sets or reads one.
+#
+# ~/.azcopy is per-user state and belongs in each account's own home: azcopy
+# writes a job plan directory and a log file there the first time an account
+# runs anything that touches the job engine. `--version` writes nothing, but
+# `jobs list` and even `completion bash` do -- which is why task 14 below
+# generates the completion script with HOME pointed at the scratch directory
+# rather than letting it seed /root/.azcopy.
+#
+# Usage:
+#   ansible-playbook cloud-cli/azcopy.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/azcopy.yml -e host=ws01 -e azcopy_version=10.33.0 -e azcopy_sha256=<sha256>
+
+- name: Install AzCopy system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    azcopy_version: "10.32.8"
+    azcopy_base_url: "https://github.com/Azure/azure-storage-azcopy/releases/download/v{{ azcopy_version }}"
+    # ansible_facts['architecture'] -> upstream asset name (Go names).
+    azcopy_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    azcopy_arch: "{{ azcopy_arch_map.get(ansible_facts['architecture'], '') }}"
+    azcopy_tarball: "azcopy_linux_{{ azcopy_arch }}_{{ azcopy_version }}.tar.gz"
+    # The tarball unpacks into a directory named after itself, holding the
+    # binary and NOTICE.txt. Only the binary is installed.
+    azcopy_unpacked_dir: "azcopy_linux_{{ azcopy_arch }}_{{ azcopy_version }}"
+    # This project publishes NO checksums file and no hashes in its release
+    # notes, so the sha256 of each asset is pinned here instead of being
+    # resolved at run time the way gcx-cli.yml resolves gcx's. Recorded from
+    # the published assets on 2026-09-15. Being pinned, they belong to one
+    # exact version -- hence azcopy_checksum_version and task 3.
+    azcopy_checksum_version: "10.32.8"
+    azcopy_sha256_map:
+      amd64: "a95277dbc265912cefdddbaf251aa99ec648cb18ba657e8788066357a9022dc3"
+      arm64: "50e6e58a109f2afd64376b5b003973ff213fbfdec795fe81a95b208982061d9b"
+    azcopy_sha256: "{{ azcopy_sha256_map.get(azcopy_arch, '') }}"
+    azcopy_bin: /usr/local/bin/azcopy
+    azcopy_completion: /etc/bash_completion.d/azcopy
+    # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts and the
+    # tarball alone is ~25MiB.
+    azcopy_stage_dir: "/var/tmp/azcopy-install-{{ azcopy_version }}"
+    azcopy_smoke_home: /var/tmp/azcopy-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    azcopy_verify_uid: 65534    # nobody
+    azcopy_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # bash-completion provides the loader that reads /etc/bash_completion.d,
+      # so the completion file task 15 writes is inert without it.
+      ansible.builtin.apt:
+        name:
+          - bash-completion
+          - ca-certificates
+          - tar
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No azcopy release asset is mapped for architecture
+          '{{ ansible_facts['architecture'] }}'. Add it to azcopy_arch_map.
+      when: azcopy_arch | length == 0
+
+    - name: 3. Fail when the version pin has moved past the recorded checksums
+      # The second condition is how "the caller did not supply a hash" is
+      # detected: an -e azcopy_sha256=... extra var replaces the play var
+      # entirely, so a value still equal to the map's is one nobody overrode.
+      # Without this guard, overriding only the version downloads a new tarball
+      # and checks it against the old version's hash, which fails in task 8
+      # with a checksum mismatch that reads like a tampered download.
+      ansible.builtin.fail:
+        msg: >-
+          azcopy_version is {{ azcopy_version }} but the sha256 values in this
+          playbook were recorded for {{ azcopy_checksum_version }}. Upstream
+          publishes no checksums file, so either update azcopy_checksum_version
+          and azcopy_sha256_map together, or pass this version's hash with
+          -e azcopy_sha256=<sha256>.
+      when:
+        - azcopy_version != azcopy_checksum_version
+        - azcopy_sha256 == azcopy_sha256_map.get(azcopy_arch, '')
+
+    - name: 4. Check the currently installed azcopy version
+      # check_mode: false because this reads state that already exists. A
+      # skipped command task registers rc 0 and an empty stdout, which task 5
+      # would read as a version merely different from the pin.
+      #
+      # `azcopy --version` is the one subcommand that writes nothing to HOME
+      # (confirmed against the binary), so running it as root here does not
+      # seed /root/.azcopy.
+      ansible.builtin.command: "{{ azcopy_bin }} --version"
+      register: azcopy_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 5. Decide whether azcopy needs installing
+      # The whole line is compared, not a prefix: `azcopy --version` prints
+      # exactly "azcopy version 10.32.8", so a pin of 10.32.8 must not be
+      # satisfied by an installed 10.32.80.
+      ansible.builtin.set_fact:
+        azcopy_install_needed: >-
+          {{ (azcopy_installed.stdout | default('') | trim)
+             != ('azcopy version ' ~ azcopy_version) }}
+        azcopy_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (azcopy_installed.stdout | default('') | trim)
+                      != ('azcopy version ' ~ azcopy_version)) }}
+
+    - name: 5a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install azcopy {{ azcopy_version }}, so the version
+          check and the unprivileged smoke tests below are skipped rather than
+          failed. Re-run without --check to verify the install.
+      when: not (azcopy_can_verify | bool)
+
+    - name: 6. Create the staging directory
+      ansible.builtin.file:
+        path: "{{ azcopy_stage_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: azcopy_install_needed | bool
+
+    - name: 7. Download the azcopy tarball and verify its checksum
+      # get_url fails the task when the hash does not match, so this is both
+      # the download and the integrity check.
+      #
+      # Not under --check: get_url is not skipped in check mode and validates
+      # its destination, which task 6 has not really created.
+      ansible.builtin.get_url:
+        url: "{{ azcopy_base_url }}/{{ azcopy_tarball }}"
+        dest: "{{ azcopy_stage_dir }}/{{ azcopy_tarball }}"
+        checksum: "sha256:{{ azcopy_sha256 }}"
+        owner: root
+        group: root
+        mode: '0600'
+      when:
+        - azcopy_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 8. Unpack the tarball
+      ansible.builtin.unarchive:
+        src: "{{ azcopy_stage_dir }}/{{ azcopy_tarball }}"
+        dest: "{{ azcopy_stage_dir }}"
+        remote_src: true
+        owner: root
+        group: root
+      when:
+        - azcopy_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 9. Install the azcopy binary
+      # Explicit mode rather than whatever the tarball carried: the binary must
+      # be executable by every account, not only by the one that unpacked it.
+      ansible.builtin.copy:
+        src: "{{ azcopy_stage_dir }}/{{ azcopy_unpacked_dir }}/azcopy"
+        dest: "{{ azcopy_bin }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0755'
+      when:
+        - azcopy_install_needed | bool
+        - not ansible_check_mode
+
+    - name: 10. Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ azcopy_stage_dir }}"
+        state: absent
+
+    - name: 11. Verify the installed azcopy version
+      ansible.builtin.command: "{{ azcopy_bin }} --version"
+      register: azcopy_version_out
+      changed_when: false
+      check_mode: false
+      failed_when: (azcopy_version_out.stdout | trim) != ('azcopy version ' ~ azcopy_version)
+      when: azcopy_can_verify | bool
+
+    - name: 12. Create a scratch HOME for the unprivileged checks
+      # azcopy needs a *writable* HOME for anything that touches the job
+      # engine: it mkdirs ~/.azcopy/plans and opens a log file there. It is
+      # created before the completion generation below, not only for the smoke
+      # tests, because that command needs the same writable HOME.
+      #
+      # check_mode: false because `command` validates chdir *before* check mode
+      # skips the task, so a directory that exists only in simulation fails the
+      # dry run.
+      ansible.builtin.file:
+        path: "{{ azcopy_smoke_home }}"
+        state: directory
+        owner: "{{ azcopy_verify_uid }}"
+        group: "{{ azcopy_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+      when: azcopy_can_verify | bool
+
+    - name: 13. Generate the bash completion script
+      # azcopy ships no completion file; cobra generates one on demand. HOME is
+      # redirected at the scratch directory because this command creates
+      # ~/.azcopy for whoever runs it -- confirmed against the binary -- and
+      # root's home is not where a log from an install belongs.
+      ansible.builtin.command:
+        cmd: >-
+          env HOME={{ azcopy_smoke_home }} {{ azcopy_bin }} completion bash
+        chdir: "{{ azcopy_smoke_home }}"
+      register: azcopy_completion_out
+      changed_when: false
+      check_mode: false
+      when: azcopy_can_verify | bool
+
+    - name: 14. Install the bash completion script
+      # /etc/bash_completion.d rather than any $HOME: that directory is read by
+      # the bash-completion loader for every account and needs no
+      # /etc/profile.d bootstrap.
+      ansible.builtin.copy:
+        content: "{{ azcopy_completion_out.stdout }}\n"
+        dest: "{{ azcopy_completion }}"
+        owner: root
+        group: root
+        mode: '0644'
+      when: azcopy_can_verify | bool
+
+    - name: 15. Report the azcopy version as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ azcopy_verify_uid }} --regid={{ azcopy_verify_gid }} --clear-groups
+          env HOME={{ azcopy_smoke_home }} {{ azcopy_bin }} --version
+        chdir: "{{ azcopy_smoke_home }}"
+      register: azcopy_smoke_version
+      changed_when: false
+      check_mode: false
+      failed_when: (azcopy_smoke_version.stdout | trim) != ('azcopy version ' ~ azcopy_version)
+      when: azcopy_can_verify | bool
+
+    - name: 16. List the job history as an unprivileged user
+      # Real offline work rather than a second version string: `jobs list`
+      # starts the job engine, creates ~/.azcopy/plans, opens a log file and
+      # reads the (empty) plan directory back. It needs no credentials and
+      # contacts no storage account, so it proves the zero-configuration path
+      # -- every other subcommand needs an authenticated URL, which is identity
+      # rather than reachability. No AZCOPY_* variable is set, so default
+      # discovery is what gets tested.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ azcopy_verify_uid }} --regid={{ azcopy_verify_gid }} --clear-groups
+          env HOME={{ azcopy_smoke_home }} {{ azcopy_bin }} jobs list
+        chdir: "{{ azcopy_smoke_home }}"
+      register: azcopy_smoke_jobs
+      changed_when: false
+      check_mode: false
+      failed_when: "'Existing Jobs' not in azcopy_smoke_jobs.stdout"
+      when: azcopy_can_verify | bool
+
+    - name: 17. Confirm a login shell resolves azcopy to the system-wide copy
+      # /usr/local/bin precedes /usr/bin on the default PATH, so this also
+      # proves the system-wide copy wins over a /usr/bin/azcopy from the
+      # Microsoft apt package, on a host that has ever had one.
+      # `env -i ... bash -lc` starts from an empty environment, so PATH comes
+      # purely from /etc/profile and (via it) /etc/bash.bashrc. It cannot see a
+      # line in an individual user's own ~/.bashrc -- check those by hand.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ azcopy_verify_uid }} --regid={{ azcopy_verify_gid }} --clear-groups
+          env -i HOME={{ azcopy_smoke_home }} bash -lc 'command -v azcopy'
+        chdir: "{{ azcopy_smoke_home }}"
+      register: azcopy_smoke_path
+      changed_when: false
+      check_mode: false
+      failed_when: (azcopy_smoke_path.stdout | trim) != azcopy_bin
+      when: azcopy_can_verify | bool
+
+    - name: 18. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ azcopy_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 19. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            AzCopy {{ azcopy_version }} ({{ azcopy_arch }})
+            {{ azcopy_can_verify | bool
+               | ternary('is installed system-wide.', 'would be installed system-wide.') }}
+          - ""
+          - "  {{ azcopy_bin }}"
+          - "  {{ azcopy_completion }}"
+          - ""
+          - "The tarball is checked against a sha256 pinned in this playbook: upstream"
+          - "publishes no checksums file, so bumping the version means recording new hashes."
+          - >-
+            {{ azcopy_can_verify | bool
+               | ternary('Verified runnable by an unprivileged user (uid ' ~ azcopy_verify_uid
+                         ~ '), listing its job history offline, and resolved on PATH from a login shell.',
+                         'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "No identity is configured by this playbook. Each user runs, for themselves:"
+          - "  azcopy login                 # caches an Entra ID token under ~/.azcopy"
+          - "  azcopy jobs list             # confirm the job engine starts"
+          - ""
+          - "~/.azcopy holds each account's own job plans and logs, and is created on"
+          - "first use. The AZCOPY_* credential variables (AZCOPY_SPA_CLIENT_SECRET and"
+          - "friends) and SAS tokens are SECRETS: keep them in your own environment,"
+          - "never in /etc/environment, which is world-readable."

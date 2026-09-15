@@ -101,7 +101,7 @@ installed once is usable by every account on a **shared** workstation. Run again
 | Directory | Description |
 |-----------|-------------|
 | [playbooks/misc/](playbooks/misc/README.md) | Developer tools (asciidoctor, bats, certbot, dotnet-tools, dvc, exiftool, gomplate, grype-syft, hadolint, jsonnet, jsmin, junit2html, k6, kube-score, maven, mocha-chai, mongodb-tools, plantuml, playwright, scc, testssl, trivy, zap) |
-| [playbooks/cloud-cli/](playbooks/cloud-cli/README.md) | Cloud/service CLI tools (auth0-deploy-cli, aws, az, az devops, databricks, gcloud, gcx, gh, glab, influx, jenkins, jira, logcli, tofu, promtool/amtool, sonar-scanner, vault, Azure PowerShell) |
+| [playbooks/cloud-cli/](playbooks/cloud-cli/README.md) | Cloud/service CLI tools (auth0-deploy-cli, aws, az, az devops, azcopy, databricks, gcloud, gcx, gh, glab, influx, jenkins, jira, logcli, tofu, promtool/amtool, sonar-scanner, vault, Azure PowerShell) |
 | [playbooks/core/](playbooks/core/README.md) | Core CLI tools, modern CLI tool replacements, jq, yq, shellcheck, markdownlint, eslint, Node.js/Yarn/pnpm, mise, ansible-core, .NET SDK, PowerShell, OpenJDK, Ruby, plus the container runtimes and Kubernetes tools (Docker, Podman, kubectl, Helm, kind, minikube, devcontainers, kubelogin/k9s/kdash) |
 
 One thing to know before running `core/docker.yml`: it grants **no** account access to the

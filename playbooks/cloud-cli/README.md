@@ -495,6 +495,56 @@ a shared default under an unread name is invisible, since the variable is set,
 
 Note how close `AZURE_DEVOPS_EXT__DEFAULTS_*` sits to the secret `AZURE_DEVOPS_EXT_PAT`.
 
+## azcopy.yml
+
+Installs [AzCopy](https://learn.microsoft.com/azure/storage/common/storage-use-azcopy-v10) —
+the Azure Storage data transfer utility — from the upstream release tarball.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/local/bin/azcopy` | the binary |
+| `/etc/bash_completion.d/azcopy` | shell completions, generated at install time |
+
+**Why not the Microsoft apt repository?** Microsoft publishes azcopy in
+`packages.microsoft.com/repos/microsoft-ubuntu-<release>-prod`, and that repository has no
+26.04 answer: its `resolute` suite publishes 666 packages and azcopy is not one of them,
+while `noble` publishes 4779 and carries it. Mapping resolute onto noble — the trick
+[`azure-cli.yml`](#azure-cliyml) and [`vault-cli.yml`](#vault-cliyml) use for their own
+vendor repositories — is a different proposition here, because the *prod* repository is not
+a single-product one: it also ships `kubectl`, `moby-*` and `mssql-*`, and adding it to a
+workstation changes apt's candidate for those too. One binary is not worth that, so this
+playbook adds no repository at all.
+
+**The checksum is pinned in the playbook, not resolved at run time.** This project publishes
+no checksums file and no hashes in its release notes, unlike gcx or jira-cli, so the sha256
+of each architecture's asset is recorded in `azcopy_sha256_map` and belongs to one exact
+version. Overriding `azcopy_version` alone therefore fails fast with an explanation rather
+than downloading a new tarball and comparing it against the old hash:
+
+```bash
+ansible-playbook cloud-cli/azcopy.yml -e host=ws01 \
+  -e azcopy_version=10.33.0 -e azcopy_sha256=<sha256 of the new tarball>
+```
+
+### Verification
+
+Three checks as `nobody` in a scratch `HOME`: `--version`, then `azcopy jobs list`, then a
+login shell resolving `azcopy` on `PATH`. `jobs list` is the real-work one — it starts the
+job engine, creates the plan directory, opens a log and reads the (empty) history back —
+and it is the only interesting subcommand that needs no credentials, since everything else
+wants an authenticated URL.
+
+**`~/.azcopy` is per-user state, and more commands create it than you would expect.**
+`--version` writes nothing, but `jobs list` *and* `completion bash` both create
+`~/.azcopy/plans` and a log file for whoever runs them. The playbook therefore generates the
+completion script with `HOME` pointed at its scratch directory: otherwise installing a CLI
+would seed `/root/.azcopy` with a log. Each account's own `~/.azcopy` is created on first
+use and is exactly where job plans and logs belong.
+
+No identity is configured: `azcopy login` caches an Entra ID token under `~/.azcopy`, and
+`AZCOPY_SPA_CLIENT_SECRET`, `AZCOPY_AUTO_LOGIN_TYPE` and SAS tokens are per-person secrets
+that this playbook neither sets nor reads.
+
 ## databricks-cli.yml
 
 Installs the [Databricks CLI](https://docs.databricks.com/dev-tools/cli/index.html) from its
