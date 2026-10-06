@@ -4,7 +4,7 @@ Standalone playbooks that install Node.js, mise, ansible-core, the .NET SDK, Pow
 OpenJDK, Ruby and the container and Kubernetes tooling (Docker, Podman, kubectl, Helm, kind,
 minikube, the Dev Containers CLI, kubelogin/k9s/kdash) on a **shared**
 Ubuntu workstation, to root-owned system paths usable by every account on the host.
-See [POLICY.md](../POLICY.md) for the rules they follow.
+See [POLICY.md](../docs/POLICY.md) for the rules they follow.
 
 Run from `playbooks/`:
 
@@ -176,7 +176,7 @@ Installs mise from its own apt repository.
 mise's shell integration goes to `/etc/profile.d/mise.sh` system-wide — the same
 destination and the same shape (a live `eval`, not a captured snapshot) as
 `modern-tools.yml`'s `fzf.sh` — rather than into any one account's `~/.bashrc` (see
-[POLICY.md's B3](../POLICY.md) on why a `PATH`/env-rewriting hook belongs there and not among
+[POLICY.md's B3](../docs/POLICY.md) on why a `PATH`/env-rewriting hook belongs there and not among
 completions or static aliases). `/etc/bash.bashrc` needs the `/etc/profile.d` bootstrap for
 non-login interactive shells to read it, which this playbook lays down defensively in case
 it runs on a host no other playbook has touched yet.
@@ -186,7 +186,7 @@ root.** Confirmed live: `HOME=<scratch> mise --version` creates
 `<scratch>/.cache/mise/latest-version`, a self-update-check cache, from the plainest possible
 invocation. The install and post-install version checks compare `dpkg-query` output instead —
 running `mise --version` as root would leave `/root/.cache/mise` behind, which is exactly what
-[POLICY.md's B2](../POLICY.md) forbids ("no task ... may write ... under any account's `$HOME`, including the
+[POLICY.md's B2](../docs/POLICY.md) forbids ("no task ... may write ... under any account's `$HOME`, including the
 invoker's"). The unprivileged checks give mise a scratch, writable `HOME` for the same reason
 every other tool in this repo that touches `$HOME` gets one.
 
@@ -226,7 +226,7 @@ cache) on first use. A shared NuGet cache is deliberately not created: one accou
 should not decide what another builds against.
 
 That same fact makes the CLI unsafe to run as root here — `dotnet --version` alone creates
-`/root/.dotnet`, which [POLICY.md's B2](../POLICY.md) forbids — so the idempotency and version checks read
+`/root/.dotnet`, which [POLICY.md's B2](../docs/POLICY.md) forbids — so the idempotency and version checks read
 `dpkg-query` (as `mise.yml` does) and every actual `dotnet` invocation is unprivileged with a
 scratch `HOME`.
 
@@ -270,7 +270,7 @@ release, verified against the SHA-256 GitHub publishes for the asset.
 PowerShell writes `~/.cache/powershell` (including `telemetry.uuid` and startup profile data),
 `~/.config/powershell` and `~/.local/share/powershell` — confirmed live, the cache appears on the
 plainest possible invocation. Running it as root would leave that under `/root`, which
-[POLICY.md's B2](../POLICY.md) forbids, so the idempotency check reads the filesystem (the versioned path and
+[POLICY.md's B2](../docs/POLICY.md) forbids, so the idempotency check reads the filesystem (the versioned path and
 the symlink target) and every `pwsh` invocation is unprivileged with a scratch `HOME`.
 
 ### The AllUsers module scope is asserted, not assumed
@@ -381,7 +381,7 @@ runtime library.
 
 fzf's key bindings need `/etc/profile.d` to actually be read by interactive shells, which is
 not true by default for a non-login shell (e.g. a plain SSH session) on stock Ubuntu — see
-[POLICY.md's B3](../POLICY.md). This playbook adds that hook to `/etc/bash.bashrc`; the
+[POLICY.md's B3](../docs/POLICY.md). This playbook adds that hook to `/etc/bash.bashrc`; the
 task is an idempotent no-op for any other playbook that adds the same hook.
 
 The unprivileged verification step runs every tool's `--version` as `nobody`, then separately
@@ -595,7 +595,7 @@ Installs [mikefarah/yq](https://github.com/mikefarah/yq) as a single static bina
 to a shell profile.
 
 This is a release binary rather than a plain apt install, deliberately: per the
-apt gotcha in [INSTALL-MECHANISMS.md](../INSTALL-MECHANISMS.md), Ubuntu's apt `yq` is
+apt gotcha in [INSTALL-MECHANISMS.md](../docs/INSTALL-MECHANISMS.md), Ubuntu's apt `yq` is
 `kislyuk/yq`, a Python
 wrapper around `jq` with entirely different syntax from mikefarah's Go `yq` that this
 playbook installs. Silently swapping one for the other under the same command name would
@@ -639,7 +639,7 @@ instruction to run this playbook first, rather than carrying a second copy of th
 
 **apt, not rbenv.** The single-user role this replaces cloned rbenv and ruby-build into
 `~/.rbenv`, built Ruby from source there, and appended `eval "$(rbenv init - bash)"` to that one
-account's `~/.bashrc` — all of it per-identity, which [POLICY.md](../POLICY.md) points 1 and 3
+account's `~/.bashrc` — all of it per-identity, which [POLICY.md](../docs/POLICY.md) points 1 and 3
 rule out. Ubuntu 26.04 carries Ruby 3.3.8, current enough for everything this repository
 installs on top of it, so apt is the first mechanism that applies.
 
@@ -1053,7 +1053,7 @@ generating that output is not read-only — `pyenv init -` creates `$PYENV_ROOT/
 on the way — so an account whose home is missing or unwritable, including uid 65534, otherwise
 gets two `mkdir: cannot create directory` errors every time a shell starts.
 
-**There is no `/etc/bash_completion.d/pyenv`,** which reads [POLICY.md's B3](../POLICY.md)
+**There is no `/etc/bash_completion.d/pyenv`,** which reads [POLICY.md's B3](../docs/POLICY.md)
 loosely: `pyenv init -` sources pyenv's own `completions/pyenv.bash` out of the install prefix
 itself, so a second copy under `/etc/bash_completion.d` would be loaded twice. B3 asks for the
 output of a `completion bash` subcommand to be snapshotted; pyenv has no such subcommand, only a

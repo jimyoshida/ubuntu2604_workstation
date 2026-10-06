@@ -2,7 +2,7 @@
 
 Standalone playbooks that install developer tooling on a **shared** Ubuntu workstation, to
 root-owned system paths usable by every account on the host rather than into one account's
-home directory. See [POLICY.md](../POLICY.md) for the rules they follow.
+home directory. See [POLICY.md](../docs/POLICY.md) for the rules they follow.
 
 Run from `playbooks/`:
 
@@ -133,7 +133,7 @@ Ubuntu carries no `trivy` package at all, so this adds the vendor's apt reposito
 | `/usr/bin/trivy` | installed by apt |
 
 - **The key is fetched by URL and pinned by fingerprint,** not embedded. Aqua Security's
-  key expires **2029-04-15**, and [POLICY.md's A5](../POLICY.md) pins the bytes only for
+  key expires **2029-04-15**, and [POLICY.md's A5](../docs/POLICY.md) pins the bytes only for
   a key with no expiry — a pinned copy would simply stop working at that date, while
   fetching each run picks up whatever successor Aqua publishes. The fingerprint
   `825AD9036F7C850E6A6FED4935B8ACA44FD9CA9F` is asserted after import, so a repository
@@ -215,7 +215,7 @@ Installs [junit2html](https://gitlab.com/inorton/junit2html) via `pipx`, root-ow
 | `/usr/local/share/man` | `PIPX_MAN_DIR` |
 
 Runs `pipx` as `root` with `PIPX_HOME`/`PIPX_BIN_DIR`/`PIPX_MAN_DIR` redirected to the root-owned paths
-above — the pipx-as-root pattern in [INSTALL-MECHANISMS.md](../INSTALL-MECHANISMS.md) —
+above — the pipx-as-root pattern in [INSTALL-MECHANISMS.md](../docs/INSTALL-MECHANISMS.md) —
 rather than the per-user `~/.local/bin` / `~/.local/pipx` that a plain `pipx install` as
 the connecting user would use. There is nothing to add to a shell profile: junit2html is a
 plain CLI with no per-user configuration.
@@ -223,7 +223,7 @@ plain CLI with no per-user configuration.
 - **`PIPX_MAN_DIR` matters.** Left unset, pipx creates `/root/.local/share/man` on every
   run — confirmed by removing that directory, running an install with the variable set (it
   stays gone) and one without it (it comes back). Writing under root's own `$HOME` is what
-  [POLICY.md's B2](../POLICY.md) forbids. The playbook also clears up the directory earlier runs left
+  [POLICY.md's B2](../docs/POLICY.md) forbids. The playbook also clears up the directory earlier runs left
   behind, with `rmdir` rather than `state: absent` so it goes only when empty; anything since
   put there is somebody's and is left alone. [`certbot.yml`](#certbotyml), the other pipx
   user here, does the same, and the two are no-ops for each other.
@@ -297,7 +297,7 @@ jar is fetched from Maven Central instead, `net.sourceforge.plantuml:plantuml` �
 distribution, the same artifact the GitHub release page calls `plantuml.jar`.
 
 Central rather than the GitHub release for one reason: it publishes a `.sha256` beside every
-artifact, so the hash is resolved at run time ([POLICY.md](../POLICY.md) point 7) and changing
+artifact, so the hash is resolved at run time ([POLICY.md](../docs/POLICY.md) point 7) and changing
 `plantuml_version` stays a one-flag change. GitHub's assets carry only detached `.asc`
 signatures and no checksum file. The two jars for a given version are *not* byte-identical —
 they are packed separately — so a hash taken from one will not verify the other.
@@ -541,7 +541,7 @@ are both still release candidates as of 2026-08-17, so the 3.9.x line is the sta
 - **The tarball, not the zip.** Apache's `-bin.zip` does not carry Unix permission bits
   reliably; the `.tar.gz` does, and its `bin/mvn` arrives already `0755`.
 - **No `settings.xml` of this repo's own.** The distribution ships one and it is left exactly
-  as shipped — writing a copy here to configure nothing is the dead config [POLICY.md's A2/A3](../POLICY.md)
+  as shipped — writing a copy here to configure nothing is the dead config [POLICY.md's A2/A3](../docs/POLICY.md)
   removed elsewhere. A host that needs a proxy or a mirror sets it there or in each account's
   own `~/.m2/settings.xml`.
 - **A checked JDK prerequisite**, [`core/openjdk.yml`](../core/README.md#openjdkyml), rather than
@@ -555,7 +555,7 @@ carefully `$HOME` is set — the same class of trap as `core/ansible.yml`'s `rem
 The unprivileged checks therefore pass an explicit `-Dmaven.repo.local`. They also need
 `chdir`: the `mvn` script walks up looking for a project base directory, and an unprivileged
 process left in a directory it cannot read prints `cd: can't cd to /home/<invoker>` — the
-second half of [POLICY.md's C6](../POLICY.md), here triggered by Maven's own launcher.
+second half of [POLICY.md's C6](../docs/POLICY.md), here triggered by Maven's own launcher.
 
 ### The smoke test is an offline build, plus a deliberate failure
 
@@ -661,7 +661,7 @@ That makes verification a trap twice over, and both halves were reproduced on a 
   resolves its home to `/nonexistent` and dies with `Unable to create home directory:
   /nonexistent/.ZAP/` no matter how `$HOME` is set. The scan passes an explicit `-dir`. Same
   trap [`maven.yml`](#mavenyml) documents, but fatal here rather than a fallback.
-- **Running `zap.sh` as root without `-dir` creates `/root/.ZAP`**, which [POLICY.md's B2](../POLICY.md)
+- **Running `zap.sh` as root without `-dir` creates `/root/.ZAP`**, which [POLICY.md's B2](../docs/POLICY.md)
   forbids. So ZAP is never run as root at all: the install check is filesystem state, and the
   single ZAP invocation in the play is the unprivileged scan.
 
@@ -802,7 +802,7 @@ created here.
 Without it, pipx creates `/root/.local/share/man`. Confirmed by experiment: remove that
 directory, run an install with `PIPX_MAN_DIR` set — it stays gone and the configured directory
 appears instead — then run one without it, and it comes back. Writing under root's own `$HOME`
-is what [POLICY.md's B2](../POLICY.md) forbids, and it also puts any man page a package ships somewhere no
+is what [POLICY.md's B2](../docs/POLICY.md) forbids, and it also puts any man page a package ships somewhere no
 other account can read. Here it points at `/usr/local/share/man`, where `man certbot` finds it.
 
 Both this playbook and [`junit2html.yml`](#junit2htmlyml) — the other pipx user here — also
@@ -862,7 +862,7 @@ curl -sSL https://dvc.org/deb/dists/stable/main/binary-amd64/Packages \
   | awk '/^Package: dvc$/{f=1} f&&/^Version:/{print $2; f=0}' | sort -V | tail -1
 ```
 
-**The signing key expires 2027-03-05**, so per [POLICY.md's A5 rule](../POLICY.md) it is fetched by URL each run
+**The signing key expires 2027-03-05**, so per [POLICY.md's A5 rule](../docs/POLICY.md) it is fetched by URL each run
 (the module compares by checksum, so that stays idempotent) with only the fingerprint pinned —
 the `mise.yml`/`github-cli.yml` form rather than an inline key.
 
@@ -1139,7 +1139,7 @@ which is worth knowing before it reaches a licence scanner.
 and a stack trace. The install guard and the pin check therefore read npm's own metadata
 (`npm ls -g jsmin@<version>`, non-zero both for a missing package and for a wrong version),
 and the real proof is the minification described below — the case
-[POLICY.md's C3](../POLICY.md) covers with "verify something else real".
+[POLICY.md's C3](../docs/POLICY.md) covers with "verify something else real".
 
 **The CLI needs no `NODE_PATH`; library use does.** `bin/jsmin` does `require('jsmin')` —
 itself a global package — and that resolves because Node follows the `<prefix>/bin/jsmin`

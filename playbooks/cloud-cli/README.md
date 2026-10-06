@@ -2,7 +2,7 @@
 
 Standalone playbooks that install cloud and service CLI tools on a **shared** Ubuntu
 workstation, to root-owned system paths usable by every account on the host rather than into
-one account's home directory. See [POLICY.md](../POLICY.md) for the rules they follow.
+one account's home directory. See [POLICY.md](../docs/POLICY.md) for the rules they follow.
 
 Run from `playbooks/`:
 
@@ -1031,7 +1031,7 @@ and [`misc/zap.yml`](../misc/README.md#zapyml) shape: bumping `sonar_scanner_ver
 beside the old tree and moves the symlink, and `ls -l /usr/local/bin/sonar-scanner` says which
 version is active. The role this replaces
 unpacked the archive into `/opt` and chowned the tree to one named account, which is what
-[POLICY.md](../POLICY.md) point 1 and B2 rule out on a shared host.
+[POLICY.md](../docs/POLICY.md) point 1 and B2 rule out on a shared host.
 
 **No JDK prerequisite, unlike every other Java tool here.** The `linux-x64` and `linux-aarch64`
 archives bundle their own JRE and `bin/sonar-scanner` sets `JAVA_HOME` to it unconditionally
@@ -1051,7 +1051,7 @@ directory is moved into place instead.
 
 **The server URL is shared configuration; the token is not.** `sonar.host.url` names one server
 for the whole host, so it is written into the distribution's own
-`conf/sonar-scanner.properties` from an explicit play var — [POLICY.md](../POLICY.md)'s A1 first
+`conf/sonar-scanner.properties` from an explicit play var — [POLICY.md](../docs/POLICY.md)'s A1 first
 row, and A2 on where the value comes from. The default is `http://localhost:9000`, SonarQube's
 own default, rather than any particular site's server: which server a host analyses against is a
 per-site decision, so it is set in [`inventory.ini`](../inventory.ini.example) or with `-e`
@@ -1082,7 +1082,7 @@ tree, and the properties passed on the command line arrived.
 
 `SONAR_USER_HOME` is pointed at a scratch directory for that run: the scanner caches under
 `~/.sonar`, and uid 65534's home is `/nonexistent` — the dump records `user.home=/nonexistent`
-even with `HOME` set, which is [POLICY.md](../POLICY.md)'s C6 exactly.
+even with `HOME` set, which is [POLICY.md](../docs/POLICY.md)'s C6 exactly.
 
 Version overrides:
 

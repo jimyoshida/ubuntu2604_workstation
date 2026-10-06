@@ -9,7 +9,7 @@ the repository is about. This is a shared workstation: several identities — pe
 reach the same box over SSH and expect the same toolchain, including accounts created after the
 tools were installed. Almost every convenient way to install a developer tool on Linux installs it
 for exactly one account instead, and most playbooks here are rewrites of single-user predecessors
-that did just that. [POLICY.md](playbooks/POLICY.md) is the rule set that came out of those
+that did just that. [POLICY.md](playbooks/docs/POLICY.md) is the rule set that came out of those
 rewrites.
 
 ### Why Homebrew is the wrong tool for a shared box
@@ -54,7 +54,7 @@ no `ruby` at all.
 Root-owned system paths (`/usr/local/bin`, `/usr/lib/<tool>`, or apt), `/etc` drop-ins for shell
 configuration, exact pinned versions, world-readable modes set explicitly rather than inherited
 from the operator's umask, and privilege grants that default to granting nothing. The load-bearing
-rule is point 9 of [POLICY.md](playbooks/POLICY.md)'s core ten: every playbook ends by exercising
+rule is point 9 of [POLICY.md](playbooks/docs/POLICY.md)'s core ten: every playbook ends by exercising
 the tool as an arbitrary uid (`setpriv --reuid=65534`), never as the connecting account, so an
 install that only works for the operator fails the run instead of passing unnoticed and breaking
 for everyone else.
@@ -131,9 +131,9 @@ Even there, a version bump within that same origin still needs the pin update ab
 Two reference documents describe how these playbooks are built, and are what a new or changed
 playbook is checked against:
 
-- **[POLICY.md](playbooks/POLICY.md)** — the rules every playbook satisfies: root-owned paths, pinned
+- **[POLICY.md](playbooks/docs/POLICY.md)** — the rules every playbook satisfies: root-owned paths, pinned
   versions, no writes to any `$HOME`, privilege grants that default to empty, and verification
   that runs as an unprivileged uid. Ends with a review checklist.
-- **[INSTALL-MECHANISMS.md](playbooks/INSTALL-MECHANISMS.md)** — how each playbook gets its tool onto the
+- **[INSTALL-MECHANISMS.md](playbooks/docs/INSTALL-MECHANISMS.md)** — how each playbook gets its tool onto the
   filesystem: apt package, vendor apt repository, upstream release artifact, pipx, `npm
   install -g`.
