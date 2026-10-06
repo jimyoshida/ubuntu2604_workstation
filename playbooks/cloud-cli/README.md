@@ -1097,6 +1097,48 @@ The current release:
 curl -sS https://api.github.com/repos/SonarSource/sonar-scanner-cli/releases/latest | jq -r .tag_name
 ```
 
+## terraform.yml
+
+Installs [Terraform](https://developer.hashicorp.com/terraform) from HashiCorp's apt
+repository.
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/terraform` | the CLI |
+| `/etc/bash_completion.d/terraform` | `complete -C /usr/bin/terraform terraform` |
+| `/etc/apt/sources.list.d/hashicorp.sources` | repository definition |
+| `/etc/apt/keyrings/hashicorp.asc` | repository signing key |
+
+The repository is the one [`vault-cli.yml`](#vault-cliyml) configures, written identically —
+same name, `noble` suite and pinned key fingerprint — so running either playbook leaves the
+other's `.sources` file unchanged. When HashiCorp next rotates the key, advance
+`terraform_key_fingerprint` and `vault_cli_key_fingerprint` together. Like `vault-cli.yml`,
+it also removes `/etc/apt/sources.list.d/apt_releases_hashicorp_com.list` when present, so
+apt does not read the same repository twice.
+
+**Terraform writes to `$HOME` on a plain `terraform version`:** unless `CHECKPOINT_DISABLE`
+is set it calls HashiCorp's checkpoint service and caches a signature under
+`~/.terraform.d`. The playbook therefore never runs terraform as root — the install guard
+and post-install check read `dpkg-query` — and the unprivileged checks run with
+`CHECKPOINT_DISABLE=1` and a scratch `HOME` under `/var/tmp`. They report the version, run
+`terraform fmt` on a small configuration file (offline, no `init`), and confirm a login
+shell resolves `terraform` to `/usr/bin/terraform`.
+
+Per-user state is untouched: `~/.terraform.d`, the `.terraform/` directory `terraform init`
+writes in each working tree, and provider credentials all stay with each user.
+
+Version overrides:
+
+```bash
+ansible-playbook cloud-cli/terraform.yml -e host=ws01 -e terraform_version=1.16.5-1
+```
+
+The current release:
+
+```bash
+apt-cache policy terraform
+```
+
 ## vault-cli.yml
 
 Installs the [Vault CLI](https://developer.hashicorp.com/vault/docs/commands) from

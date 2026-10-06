@@ -1,0 +1,306 @@
+---
+# Install Terraform system-wide on a multi-user workstation.
+#
+#   /usr/bin/terraform                             from the vendor apt package
+#   /etc/bash_completion.d/terraform               shell completion registration
+#   /etc/apt/sources.list.d/hashicorp.sources      repository definition
+#   /etc/apt/keyrings/hashicorp.asc                repository signing key
+#
+# The repository is the same one vault-cli.yml configures, written with the
+# same name, suite, architecture and key, so either playbook leaves the other's
+# .sources file unchanged.
+#
+# Per-user state stays per-user: `terraform init` writes ~/.terraform.d and a
+# .terraform directory in whatever working tree it is run from, and provider
+# credentials belong to each user's own environment. Nothing here touches them.
+#
+# TERRAFORM WRITES TO $HOME ON A PLAIN `version`: unless CHECKPOINT_DISABLE is
+# set it contacts checkpoint-api.hashicorp.com and caches a signature under
+# ~/.terraform.d. So this playbook never runs terraform as root -- the install
+# guard and post-install check compare dpkg-query output -- and the
+# unprivileged checks run with CHECKPOINT_DISABLE=1 and a scratch HOME.
+#
+# Usage:
+#   ansible-playbook cloud-cli/terraform.yml -e host=<inventory host or group>
+#   ansible-playbook cloud-cli/terraform.yml -e host=ws01 -e terraform_version=1.16.5-1
+
+- name: Install Terraform system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # dpkg-query's status field for a package that is really installed.
+    # One removed but not purged (`deinstall ok config-files`) still reports
+    # its version, so every guard below compares the status too, or a removed
+    # package reads as "already at the pin" (POLICY.md's C2).
+    terraform_dpkg_ok: "install ok installed|"
+    # apt candidate from apt.releases.hashicorp.com noble, checked 2026-10-06.
+    # `terraform version` prints the upstream version without the packaging
+    # revision, so the two forms are derived from one pin.
+    terraform_version: "1.16.5-1"
+    terraform_binary_version: "{{ terraform_version | regex_replace('-[0-9]+$', '') }}"
+    terraform_repo_uri: "https://apt.releases.hashicorp.com"
+    # noble rather than the host's own codename, for the reason vault-cli.yml
+    # gives: hosts already carry a noble entry for this URI, and two suites
+    # for one URI are two repositories to apt.
+    terraform_suite_map:
+      resolute: noble
+      plucky: noble
+    terraform_suite: >-
+      {{ terraform_suite_map.get(ansible_facts['distribution_release'],
+                                 ansible_facts['distribution_release']) }}
+    # ansible_facts['architecture'] -> apt architecture name.
+    terraform_arch_map:
+      x86_64: amd64
+      aarch64: arm64
+    terraform_arch: "{{ terraform_arch_map.get(ansible_facts['architecture'], '') }}"
+    terraform_key_url: "https://apt.releases.hashicorp.com/gpg"
+    # HashiCorp's packaging key since the 2026-09-09 rotation; it EXPIRES
+    # 2031-09-08, so per A5 it is fetched each run and only the fingerprint is
+    # pinned. Keep this in step with vault_cli_key_fingerprint.
+    terraform_key_fingerprint: "D55C0D1AC78A8D8126CB631CFC9CA96ACA026560"
+    # Single-user predecessor file for this same repository (see vault-cli.yml).
+    terraform_legacy_source: /etc/apt/sources.list.d/apt_releases_hashicorp_com.list
+    terraform_bin: /usr/bin/terraform
+    terraform_completion: /etc/bash_completion.d/terraform
+    terraform_smoke_home: /var/tmp/terraform-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    terraform_verify_uid: 65534    # nobody
+    terraform_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Install prerequisites
+      # python3-debian is required by deb822_repository; gnupg is for the
+      # fingerprint assertion in task 6; bash-completion provides the loader
+      # that reads /etc/bash_completion.d.
+      ansible.builtin.apt:
+        name:
+          - bash-completion
+          - ca-certificates
+          - gnupg
+          - python3-debian
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 2. Fail on an unsupported CPU architecture
+      ansible.builtin.fail:
+        msg: >-
+          No HashiCorp apt architecture is mapped for
+          '{{ ansible_facts['architecture'] }}'. Add it to terraform_arch_map.
+      when: terraform_arch | length == 0
+
+    - name: 3. Remove the legacy apt source for this repository
+      ansible.builtin.file:
+        path: "{{ terraform_legacy_source }}"
+        state: absent
+
+    - name: 4. Add the HashiCorp apt repository
+      ansible.builtin.deb822_repository:
+        name: hashicorp
+        types:
+          - deb
+        uris:
+          - "{{ terraform_repo_uri }}"
+        suites:
+          - "{{ terraform_suite }}"
+        components:
+          - main
+        architectures:
+          - "{{ terraform_arch }}"
+        signed_by: "{{ terraform_key_url }}"
+        state: present
+        mode: '0644'
+      register: terraform_repo
+
+    - name: 5. Read the fingerprints in the repository keyring
+      # check_mode: false so a dry run still measures the real keyring. It
+      # tolerates a miss (failed_when: false) because on a host that has never
+      # run this playbook, --check does not write the keyring for it to read.
+      ansible.builtin.command:
+        cmd: >-
+          gpg --show-keys --with-colons
+          {{ terraform_repo.key_filename | default('/etc/apt/keyrings/hashicorp.asc') }}
+      register: terraform_fpr
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 6. Confirm the keyring holds HashiCorp's packaging key
+      ansible.builtin.fail:
+        msg: >-
+          The keyring at
+          {{ terraform_repo.key_filename | default('/etc/apt/keyrings/hashicorp.asc') }}
+          does not contain HashiCorp's signing key {{ terraform_key_fingerprint }}.
+          Refusing to install from a repository signed by an unknown key.
+      when:
+        - terraform_key_fingerprint not in (terraform_fpr.stdout | default(''))
+        - not (ansible_check_mode and terraform_fpr.rc | default(1) != 0)
+
+    - name: 7. Refresh the apt cache when the repository definition changed
+      ansible.builtin.apt:
+        update_cache: true
+      when: terraform_repo.changed
+
+    - name: 8. Check the currently installed terraform package version
+      # dpkg-query, never `terraform version` as root -- see the header.
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' terraform
+      register: terraform_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 9. Decide whether terraform needs installing
+      ansible.builtin.set_fact:
+        terraform_install_needed: >-
+          {{ terraform_installed.rc != 0
+             or terraform_installed.stdout != (terraform_dpkg_ok ~ terraform_version) }}
+        terraform_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (terraform_installed.rc != 0
+                         or terraform_installed.stdout != (terraform_dpkg_ok ~ terraform_version))) }}
+
+    - name: 9a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install terraform {{ terraform_version }}, so the
+          version check and the unprivileged smoke tests below are skipped
+          rather than failed. Re-run without --check to verify the install.
+      when: not (terraform_can_verify | bool)
+
+    - name: 10. Install terraform via apt
+      # allow_downgrade so that moving the pin backwards actually applies.
+      # The second clause covers --check on a host without this repository
+      # yet: apt has no candidate for the pin there (POLICY.md's C1).
+      ansible.builtin.apt:
+        name: "terraform={{ terraform_version }}"
+        state: present
+        allow_downgrade: true
+      when:
+        - terraform_install_needed | bool
+        - not (ansible_check_mode and terraform_repo.changed)
+
+    - name: 11. Verify the installed terraform package version
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' terraform
+      register: terraform_dpkg
+      changed_when: false
+      check_mode: false
+      failed_when: terraform_dpkg.stdout != (terraform_dpkg_ok ~ terraform_version)
+      when: terraform_can_verify | bool
+
+    - name: 12. Install the bash completion registration
+      # `terraform -install-autocomplete` appends this same line to the
+      # invoking account's ~/.bashrc. Dropped into /etc/bash_completion.d
+      # instead, as vault-cli.yml does: terraform completes itself through the
+      # binary at completion time, so there is nothing to generate.
+      ansible.builtin.copy:
+        content: "complete -C {{ terraform_bin }} terraform\n"
+        dest: "{{ terraform_completion }}"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: 13. Create a scratch HOME for the unprivileged checks
+      # Doubles as the working directory (chdir) below. check_mode: false
+      # because `command` validates chdir before check mode skips the task.
+      ansible.builtin.file:
+        path: "{{ terraform_smoke_home }}"
+        state: directory
+        owner: "{{ terraform_verify_uid }}"
+        group: "{{ terraform_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+      when: terraform_can_verify | bool
+
+    - name: 14. Report the terraform version as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ terraform_verify_uid }} --regid={{ terraform_verify_gid }} --clear-groups
+          env HOME={{ terraform_smoke_home }} CHECKPOINT_DISABLE=1
+          {{ terraform_bin }} version
+        chdir: "{{ terraform_smoke_home }}"
+      register: terraform_smoke_version
+      changed_when: false
+      check_mode: false
+      failed_when: ('Terraform v' ~ terraform_binary_version) not in terraform_smoke_version.stdout
+      when: terraform_can_verify | bool
+
+    - name: 15. Write a configuration file for the offline formatter check
+      ansible.builtin.copy:
+        content: |
+          variable "example" {
+          default="value"
+          }
+        dest: "{{ terraform_smoke_home }}/main.tf"
+        owner: "{{ terraform_verify_uid }}"
+        group: "{{ terraform_verify_gid }}"
+        mode: '0600'
+      check_mode: false
+      when: terraform_can_verify | bool
+
+    - name: 16. Format a configuration file as an unprivileged user
+      # A4 tier 1: real offline work. `terraform fmt` parses HCL and rewrites
+      # the file without `init`, providers or network access, and prints the
+      # name of each file it changed.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ terraform_verify_uid }} --regid={{ terraform_verify_gid }} --clear-groups
+          env HOME={{ terraform_smoke_home }} CHECKPOINT_DISABLE=1
+          {{ terraform_bin }} fmt -no-color main.tf
+        chdir: "{{ terraform_smoke_home }}"
+      register: terraform_smoke_fmt
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        terraform_smoke_fmt.rc != 0
+        or 'main.tf' not in terraform_smoke_fmt.stdout
+      when: terraform_can_verify | bool
+
+    - name: 17. Confirm a login shell resolves terraform to the system-wide copy
+      # env -i: PATH comes purely from /etc/profile, so a system-wide PATH
+      # entry that shadows /usr/bin shows up here. A line in an individual
+      # user's own ~/.bashrc cannot be seen -- see the README.
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ terraform_verify_uid }} --regid={{ terraform_verify_gid }} --clear-groups
+          env -i HOME={{ terraform_smoke_home }} bash -lc 'command -v terraform'
+        chdir: "{{ terraform_smoke_home }}"
+      register: terraform_smoke_path
+      changed_when: false
+      check_mode: false
+      failed_when: (terraform_smoke_path.stdout | trim) != terraform_bin
+      when: terraform_can_verify | bool
+
+    - name: 18. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ terraform_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 19. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            Terraform {{ terraform_version }} ({{ terraform_arch }}, {{ terraform_suite }})
+            {{ terraform_can_verify | bool
+               | ternary('is installed system-wide.', 'would be installed system-wide.') }}
+          - ""
+          - "  {{ terraform_bin }}"
+          - "  {{ terraform_completion }}"
+          - "  /etc/apt/sources.list.d/hashicorp.sources"
+          - "  {{ terraform_repo.key_filename | default('/etc/apt/keyrings/hashicorp.asc') }}"
+          - ""
+          - "Repository keyring pinned to HashiCorp's key {{ terraform_key_fingerprint }}."
+          - >-
+            {{ terraform_can_verify | bool
+               | ternary('Verified runnable by an unprivileged user (uid ' ~ terraform_verify_uid
+                         ~ '), formatting a configuration file offline, and resolved on PATH from a login shell.',
+                         'Not verified: this was a --check run against a host without this version.') }}
+          - ""
+          - "No credentials are configured by this playbook. Each user keeps their own"
+          - "provider credentials and ~/.terraform.d; `terraform init` writes .terraform/"
+          - "in the working tree it is run from."

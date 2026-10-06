@@ -554,6 +554,7 @@ grant without an explicit list is wrong.
 | `gh` | `~/.config/gh/hosts.yml` | — |
 | `glab` | `~/.config/glab-cli/config.yml` | — |
 | `tofu` | `~/.terraform.d/` | — |
+| `terraform` | `~/.terraform.d/`, `.terraform/` in each working tree | — |
 | `jira` | `~/.config/.jira/.config.yml` | — |
 | `gcx` | `~/.config/gcx/`, `~/.local/state/gcx/` | — |
 | `influx` | `~/.influxdbv2/configs` | — |
