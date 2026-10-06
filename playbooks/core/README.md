@@ -1,6 +1,6 @@
 # Core Playbooks (multi-user workstations)
 
-Standalone playbooks that install Node.js, mise, ansible-core, the .NET SDK, PowerShell,
+Standalone playbooks that install Node.js, nodeenv, mise, ansible-core, the .NET SDK, PowerShell,
 OpenJDK, Ruby and the container and Kubernetes tooling (Docker, Podman, kubectl, Helm, kind,
 minikube, the Dev Containers CLI, kubelogin/k9s/kdash) on a **shared**
 Ubuntu workstation, to root-owned system paths usable by every account on the host.
@@ -19,9 +19,9 @@ These playbooks follow the same rules as [`misc/`](../misc/README.md) and
 any `$HOME`, and a closing check that runs the tool as an arbitrary uid
 (`setpriv --reuid=65534`) rather than as the connecting account.
 
-Most of what is here needs nothing beyond that: `nodejs.yml` is apt-only and root-owned,
-and `mise.yml` needs nothing beyond the `/etc/profile.d` hook it installs itself. The
-container and Kubernetes playbooks — [`docker.yml`](#dockeryml),
+Most of what is here needs nothing beyond that: `nodejs.yml` and `nodeenv.yml` are apt-only
+and root-owned, and `mise.yml` needs nothing beyond the `/etc/profile.d` hook it installs
+itself. The container and Kubernetes playbooks — [`docker.yml`](#dockeryml),
 [`podman.yml`](#podmanyml), [`kubectl.yml`](#kubectlyml), [`helm.yml`](#helmyml),
 [`kind.yml`](#kindyml), [`minikube.yml`](#minikubeyml),
 [`devcontainers.yml`](#devcontainersyml) and [`kube-tools.yml`](#kube-toolsyml) — install
@@ -161,6 +161,27 @@ major version:
 
 ```bash
 ansible-playbook core/nodejs.yml -e host=ws01 -e nodejs_version=24.19.0-1nodesource1
+```
+
+## nodeenv.yml
+
+Installs `nodeenv` from the Ubuntu archive (`resolute/universe`).
+
+| Path | Contents |
+| --- | --- |
+| `/usr/bin/nodeenv` | the CLI |
+
+Only the tool is shared. Each environment `nodeenv <dir>` creates is a Node.js tree in a
+directory its caller owns, and nothing here creates one.
+
+**Run [`nodejs.yml`](#nodejsyml) first.** The package's `Depends` lists `nodejs` as the
+alternative to a C/C++ build toolchain (`make`, `gcc`, `g++`, `libssl-dev`), so on a host
+without `nodejs` apt satisfies it by installing the toolchain instead.
+
+Version overrides:
+
+```bash
+ansible-playbook core/nodeenv.yml -e host=ws01 -e nodeenv_version=1.9.1-3
 ```
 
 ## mise.yml

@@ -576,6 +576,7 @@ grant without an explicit list is wrong.
 | `mise` | `~/.cache/mise`, `~/.config/mise` | — |
 | `pyenv` | `~/.pyenv` — shims, versions, and every interpreter it builds | — |
 | `ansible` | `~/.ansible` | — |
+| `nodeenv` | each environment directory a user creates | — |
 | `trivy` / `dvc` | `~/.cache/trivy`, `~/.config/dvc`, `~/.cache/dvc` | — |
 | `mongosh` | `~/.mongodb/mongosh` | — |
 

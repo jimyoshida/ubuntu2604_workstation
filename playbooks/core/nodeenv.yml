@@ -1,0 +1,137 @@
+---
+# Install nodeenv system-wide on a multi-user workstation.
+#
+# nodeenv is installed from Ubuntu's apt repositories so every account can
+# use the same root-owned binary:
+#
+#   /usr/bin/nodeenv   installed by apt, root-owned
+#
+# The environments nodeenv creates are per-user: each `nodeenv <dir>` writes
+# a Node.js tree into a directory its caller owns. Nothing here creates one.
+#
+# The package's Depends offers nodejs as the alternative to a C/C++ build
+# toolchain (make, gcc, g++, libssl-dev). On a host without nodejs, apt
+# satisfies it with the toolchain; run nodejs.yml first to avoid that.
+#
+# Usage:
+#   ansible-playbook core/nodeenv.yml -e host=<inventory host or group>
+#   ansible-playbook core/nodeenv.yml -e host=ws01 -e nodeenv_version=1.9.1-3
+
+- name: Install nodeenv system-wide
+  hosts: "{{ host }}"
+  become_user: root
+  become_method: sudo
+  become: true
+  remote_user: ubuntu
+  gather_facts: true
+
+  vars:
+    # dpkg-query's status field for a package that is really installed.
+    # One removed but not purged (`deinstall ok config-files`) still reports
+    # its version, so every guard below compares the status too, or a removed
+    # package reads as "already at the pin" (POLICY.md's C2).
+    nodeenv_dpkg_ok: "install ok installed|"
+    # apt candidate on Ubuntu 26.04 (resolute/universe), checked 2026-10-06.
+    # `nodeenv --version` prints the upstream version without the Debian
+    # revision, so the two forms are derived from one pin.
+    nodeenv_version: "1.9.1-3"
+    nodeenv_binary_version: "{{ nodeenv_version | regex_replace('-[^-]+$', '') }}"
+    nodeenv_bin: /usr/bin/nodeenv
+    nodeenv_smoke_home: /var/tmp/nodeenv-smoke-home
+    # uid/gid used to prove the install is usable by an arbitrary user
+    nodeenv_verify_uid: 65534    # nobody
+    nodeenv_verify_gid: 65534    # nogroup
+
+  tasks:
+    - name: 1. Check the currently installed nodeenv version
+      # check_mode: false throughout this playbook wherever a task only
+      # READS state: without it a dry run skips them, and guards/checks below
+      # then act on output that was never produced.
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' nodeenv
+      register: nodeenv_installed
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: 2. Decide whether nodeenv needs installing
+      ansible.builtin.set_fact:
+        nodeenv_install_needed: >-
+          {{ nodeenv_installed.rc != 0
+             or nodeenv_installed.stdout != (nodeenv_dpkg_ok ~ nodeenv_version) }}
+        nodeenv_can_verify: >-
+          {{ not (ansible_check_mode
+                  and (nodeenv_installed.rc != 0
+                         or nodeenv_installed.stdout != (nodeenv_dpkg_ok ~ nodeenv_version))) }}
+
+    - name: 2a. Note that verification is deferred in this dry run
+      ansible.builtin.debug:
+        msg: >-
+          --check did not install nodeenv {{ nodeenv_version }}, so the version
+          check and unprivileged smoke test below are skipped rather than
+          failed. Re-run without --check to verify.
+      when: not (nodeenv_can_verify | bool)
+
+    - name: 3. Install nodeenv via apt
+      # allow_downgrade so that moving the pin backwards actually applies.
+      ansible.builtin.apt:
+        name: "nodeenv={{ nodeenv_version }}"
+        state: present
+        allow_downgrade: true
+        update_cache: true
+        cache_valid_time: 3600
+      when: nodeenv_install_needed | bool
+
+    - name: 4. Verify the installed nodeenv package version
+      ansible.builtin.command: dpkg-query -W -f='${Status}|${Version}' nodeenv
+      register: nodeenv_dpkg
+      changed_when: false
+      check_mode: false
+      failed_when: nodeenv_dpkg.stdout != (nodeenv_dpkg_ok ~ nodeenv_version)
+      when: nodeenv_can_verify | bool
+
+    - name: 5. Create a scratch HOME for the unprivileged check
+      # Doubles as the working directory (chdir): uid 65534 cannot necessarily
+      # traverse the directory ansible runs from. check_mode: false because
+      # `command` validates chdir before check mode skips the task.
+      ansible.builtin.file:
+        path: "{{ nodeenv_smoke_home }}"
+        state: directory
+        owner: "{{ nodeenv_verify_uid }}"
+        group: "{{ nodeenv_verify_gid }}"
+        mode: '0700'
+      check_mode: false
+      when: nodeenv_can_verify | bool
+
+    - name: 6. Run nodeenv as an unprivileged user
+      ansible.builtin.command:
+        cmd: >-
+          setpriv --reuid={{ nodeenv_verify_uid }} --regid={{ nodeenv_verify_gid }} --clear-groups
+          env HOME={{ nodeenv_smoke_home }} TMPDIR={{ nodeenv_smoke_home }}
+          {{ nodeenv_bin }} --version
+        chdir: "{{ nodeenv_smoke_home }}"
+      register: nodeenv_smoke
+      changed_when: false
+      check_mode: false
+      failed_when: (nodeenv_smoke.stdout | trim) != nodeenv_binary_version
+      when: nodeenv_can_verify | bool
+
+    - name: 7. Remove the scratch HOME
+      ansible.builtin.file:
+        path: "{{ nodeenv_smoke_home }}"
+        state: absent
+      check_mode: false
+
+    - name: 8. Display installation summary
+      ansible.builtin.debug:
+        msg:
+          - >-
+            nodeenv {{ nodeenv_version }}
+            {{ nodeenv_can_verify | bool
+               | ternary('is installed system-wide from apt.', 'would be installed system-wide from apt.') }}
+          - ""
+          - "  {{ nodeenv_bin }}"
+          - ""
+          - >-
+            {{ nodeenv_can_verify | bool
+               | ternary('Verified runnable by an unprivileged user (uid ' ~ nodeenv_verify_uid ~ ').',
+                         'Not verified: this was a --check run against a host without this version.') }}
