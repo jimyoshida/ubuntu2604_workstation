@@ -71,9 +71,11 @@
     # It did lag, exactly as predicted: the first Setup-Ubuntu26-WS-Addon-Core
     # run to select this playbook failed with "no available installation
     # candidate for mise=2026.8.6", and the candidate on 2026-09-01 was
-    # 2026.8.16. The warning above is not boilerplate -- treat this pin as
-    # stale until re-checked.
-    mise_version: "2026.8.16"
+    # 2026.8.16. By 2026-10-15 that one was gone too: the repository's
+    # Packages index carries exactly one version, so every upstream release
+    # deletes the previous pin. The warning above is not boilerplate --
+    # treat this pin as stale until re-checked.
+    mise_version: "2026.10.10"
     mise_repo_uri: "https://mise.jdx.dev/deb"
     mise_suite: stable
     mise_key_url: "https://mise.jdx.dev/gpg-key.pub"

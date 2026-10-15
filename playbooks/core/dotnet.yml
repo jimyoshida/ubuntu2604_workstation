@@ -34,7 +34,7 @@
 #
 # Usage:
 #   ansible-playbook core/dotnet.yml -e host=<inventory host or group>
-#   ansible-playbook core/dotnet.yml -e host=ws01 -e dotnet_version=10.0.111-0ubuntu1~26.04.1
+#   ansible-playbook core/dotnet.yml -e host=ws01 -e dotnet_version=10.0.112-0ubuntu1~26.04.1
 
 - name: Install the .NET SDK system-wide
   hosts: "{{ host }}"
@@ -50,12 +50,12 @@
     # its version, so every guard below compares the status too, or a removed
     # package reads as "already at the pin" (POLICY.md's C2).
     dotnet_dpkg_ok: "install ok installed|"
-    # apt candidate on Ubuntu 26.04 (resolute), checked 2026-08-17. apt
+    # apt candidate on Ubuntu 26.04 (resolute), checked 2026-10-15. apt
     # versions are release-specific (see shellcheck.yml's note on the same
     # issue), so overriding this only helps if that exact dpkg version is
     # available from the target's configured apt sources.
     dotnet_package: dotnet-sdk-10.0
-    dotnet_version: "10.0.111-0ubuntu1~26.04.1"
+    dotnet_version: "10.0.112-0ubuntu1~26.04.1"
     dotnet_bin: /usr/bin/dotnet
     # Disk-backed, not /tmp: /tmp is a size-capped tmpfs on these hosts and a
     # first build fills a NuGet cache under this directory.

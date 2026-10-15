@@ -16,7 +16,7 @@
 #
 # Usage:
 #   ansible-playbook cloud-cli/github-cli.yml -e host=<inventory host or group>
-#   ansible-playbook cloud-cli/github-cli.yml -e host=ws01 -e github_cli_version=2.98.0
+#   ansible-playbook cloud-cli/github-cli.yml -e host=ws01 -e github_cli_version=2.102.0
 
 - name: Install the GitHub CLI system-wide
   hosts: "{{ host }}"
@@ -32,7 +32,11 @@
     # its version, so every guard below compares the status too, or a removed
     # package reads as "already at the pin" (POLICY.md's C2).
     github_cli_dpkg_ok: "install ok installed|"
-    github_cli_version: "2.98.0"
+    # cli.github.com carries exactly one version per architecture (checked
+    # 2026-10-15: the Packages index listed 2.102.0 and nothing else), so
+    # every upstream release deletes the previous pin. Re-check before
+    # trusting this.
+    github_cli_version: "2.102.0"
     github_cli_repo_uri: "https://cli.github.com/packages"
     github_cli_suite: stable
     github_cli_key_url: "https://cli.github.com/packages/githubcli-archive-keyring.gpg"
